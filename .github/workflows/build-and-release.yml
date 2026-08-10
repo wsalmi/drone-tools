@@ -19,6 +19,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Fix git safe directory
+        run: git config --global --add safe.directory /__w/drone-tools/drone-tools
+
       - name: Build firmware
         shell: bash
         run: |
