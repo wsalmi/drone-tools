@@ -19,6 +19,7 @@
 #include "esp_err.h"
 #include "protocol_signatures.h"
 #include "hal_gps.h"
+#include "detection_service.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,27 +28,6 @@ extern "C" {
 /* ========================================================================
  * Types
  * ======================================================================== */
-
-/** @brief Detection source for raw captures */
-typedef enum {
-    DETECTION_SOURCE_WIFI_RID = 0,
-    DETECTION_SOURCE_BLE_RID,
-    DETECTION_SOURCE_LORA,
-    DETECTION_SOURCE_NRF24,
-    DETECTION_SOURCE_SDR
-} detection_source_t;
-
-/** @brief Raw detection from any RF source */
-typedef struct {
-    detection_source_t source;
-    uint8_t raw_payload[256];
-    uint16_t payload_len;
-    int16_t rssi_dbm;
-    int8_t snr_db;
-    uint32_t frequency_hz;
-    uint64_t timestamp_utc_ms;
-    gps_position_t monitor_position;
-} raw_detection_t;
 
 /** @brief Classification confidence level */
 #ifndef CONFIDENCE_LEVEL_DEFINED

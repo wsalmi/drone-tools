@@ -6,6 +6,7 @@
  */
 
 #include "ui_manager.h"
+#include "screen_splash.h"
 #include "hal_display.h"
 #include <string.h>
 #include <stdio.h>
@@ -228,6 +229,9 @@ static void handle_key_generic(ui_key_t key)
 esp_err_t ui_manager_init(void)
 {
     memset(&s_ui_state, 0, sizeof(ui_state_t));
+
+    /* Show splash screen at boot */
+    screen_splash_show(0);
 
     s_ui_state.current_screen = UI_SCREEN_MAIN_MENU;
     s_ui_state.previous_screen = UI_SCREEN_MAIN_MENU;

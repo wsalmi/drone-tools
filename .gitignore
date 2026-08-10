@@ -1,1 +1,3 @@
 test/host/build
+build/
+managed_components/

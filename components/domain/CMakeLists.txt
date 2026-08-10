@@ -4,5 +4,5 @@ idf_component_register(
           "src/aircraft_registry.c"
           "src/protocol_signatures.c"
     INCLUDE_DIRS "include"
-    REQUIRES common hal cjson
+    REQUIRES common hw_hal cjson
 )

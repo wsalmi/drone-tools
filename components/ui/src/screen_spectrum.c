@@ -267,7 +267,6 @@ esp_err_t screen_spectrum_render(void)
     snprintf(peak_buf, sizeof(peak_buf), "Pk:%u", spec_state.peak_count);
     hal_display_draw_text(200, info_y + 4, peak_buf, HAL_COLOR_YELLOW, HAL_COLOR_BLACK);
 
-    (void)prev_x; /* suppress unused warning */
     return ESP_OK;
 }
 

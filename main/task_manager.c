@@ -122,7 +122,12 @@ esp_err_t task_manager_init(void)
     }
 
     /* Initialize Task Watchdog (may already be init'd by system) */
-    err = esp_task_wdt_init(CONFIG_ESP_TASK_WDT_TIMEOUT_S, true);
+    esp_task_wdt_config_t twdt_config = {
+        .timeout_ms = CONFIG_ESP_TASK_WDT_TIMEOUT_S * 1000,
+        .idle_core_mask = 0,
+        .trigger_panic = true,
+    };
+    err = esp_task_wdt_init(&twdt_config);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "TWDT init: %s (may be system-managed)", esp_err_to_name(err));
     }

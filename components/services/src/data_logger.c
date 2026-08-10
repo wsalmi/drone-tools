@@ -573,12 +573,9 @@ esp_err_t data_logger_csv_to_record(const char *csv_line, log_record_t *record)
         tm_val.tm_mon -= 1;
         tm_val.tm_isdst = -1;
 
+        /* mktime interprets as local time; on ESP-IDF timezone is UTC by default
+         * so mktime gives the correct epoch for UTC-parsed timestamps. */
         time_t epoch = mktime(&tm_val);
-        /* mktime interprets as local time; for UTC correctness on host tests
-         * we use timegm if available, but mktime is acceptable for round-trip */
-#ifdef _GNU_SOURCE
-        epoch = timegm(&tm_val);
-#endif
         record->timestamp_utc_ms = (uint64_t)epoch * 1000 + (uint64_t)ms;
     }
 

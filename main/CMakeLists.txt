@@ -4,7 +4,7 @@ idf_component_register(
          "data_pipeline.c"
     INCLUDE_DIRS "."
     REQUIRES
-        hal
+        hw_hal
         services
         domain
         ui

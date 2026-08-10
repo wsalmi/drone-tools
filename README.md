@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Drone Telemetry Monitor Logo" width="288">
+</p>
+
 # 🛩️ Drone Telemetry Monitor
 
 Real-time passive drone detection and telemetry analysis firmware for the **M5 Stack Cardputer ADV** (ESP32-S3). Intercepts, decodes, and displays drone communications across multiple RF bands — all from a pocket-sized device.

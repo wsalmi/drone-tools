@@ -12,5 +12,5 @@ idf_component_register(
           "src/spectrum_analyzer.c"
           "src/data_logger.c"
     INCLUDE_DIRS "include"
-    REQUIRES common hal domain
+    REQUIRES common hw_hal domain
 )
