@@ -1,0 +1,74 @@
+{
+    "version": "2.0.0",
+    "options": {
+        "env": {
+            "IDF_TARGET": "esp32s3"
+        }
+    },
+    "tasks": [
+        {
+            "label": "ESP-IDF: Build project",
+            "type": "shell",
+            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py build",
+            "problemMatcher": [
+                {
+                    "owner": "cpp",
+                    "fileLocation": ["autoDetect", "${workspaceFolder}"],
+                    "pattern": {
+                        "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                        "file": 1,
+                        "line": 2,
+                        "column": 3,
+                        "severity": 4,
+                        "message": 5
+                    }
+                }
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "ESP-IDF: Flash device",
+            "type": "shell",
+            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py -p ${input:serialPort} flash",
+            "dependsOn": "ESP-IDF: Build project",
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP-IDF: Monitor",
+            "type": "shell",
+            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py -p ${input:serialPort} monitor",
+            "problemMatcher": [],
+            "isBackground": true
+        },
+        {
+            "label": "ESP-IDF: Build, Flash & Monitor",
+            "type": "shell",
+            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py -p ${input:serialPort} build flash monitor",
+            "problemMatcher": [],
+            "isBackground": true
+        },
+        {
+            "label": "ESP-IDF: Clean",
+            "type": "shell",
+            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py fullclean",
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP-IDF: Set Target",
+            "type": "shell",
+            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py set-target esp32s3",
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "serialPort",
+            "type": "promptString",
+            "description": "Serial port for ESP32-S3 (e.g. /dev/cu.usbmodem*)",
+            "default": "/dev/cu.usbmodem1101"
+        }
+    ]
+}

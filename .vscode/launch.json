@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "ESP-IDF: Debug (OpenOCD)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/drone-telemetry-monitor.elf",
+            "MIMode": "gdb",
+            "miDebuggerPath": "${env:IDF_TOOLS_PATH}/tools/xtensa-esp-elf-gdb/14.2_20240403/xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-gdb",
+            "cwd": "${workspaceFolder}",
+            "setupCommands": [
+                { "text": "target remote :3333" },
+                { "text": "set remote hardware-watchpoint-limit 2" },
+                { "text": "mon reset halt" },
+                { "text": "maintenance flush register-cache" },
+                { "text": "thb app_main" }
+            ],
+            "externalConsole": false,
+            "preLaunchTask": "ESP-IDF: Flash device"
+        }
+    ]
+}
