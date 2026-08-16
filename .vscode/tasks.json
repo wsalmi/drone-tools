@@ -2,14 +2,15 @@
     "version": "2.0.0",
     "options": {
         "env": {
-            "IDF_TARGET": "esp32s3"
+            "IDF_TARGET": "esp32s3",
+            "IDF_PYTHON_ENV_PATH": "${userHome}/.espressif/python_env/idf5.5_py3.12_env"
         }
     },
     "tasks": [
         {
             "label": "ESP-IDF: Build project",
             "type": "shell",
-            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py build",
+            "command": "export IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf5.5_py3.12_env && if [ -f $HOME/esp/esp-idf/export.sh ]; then . $HOME/esp/esp-idf/export.sh > /dev/null; else . $HOME/.platformio/packages/framework-espidf/export.sh > /dev/null; fi && idf.py build",
             "problemMatcher": [
                 {
                     "owner": "cpp",
@@ -32,34 +33,34 @@
         {
             "label": "ESP-IDF: Flash device",
             "type": "shell",
-            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py -p ${input:serialPort} flash",
+            "command": "export IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf5.5_py3.12_env && if [ -f $HOME/esp/esp-idf/export.sh ]; then . $HOME/esp/esp-idf/export.sh > /dev/null; else . $HOME/.platformio/packages/framework-espidf/export.sh > /dev/null; fi && idf.py -p ${input:serialPort} flash",
             "dependsOn": "ESP-IDF: Build project",
             "problemMatcher": []
         },
         {
             "label": "ESP-IDF: Monitor",
             "type": "shell",
-            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py -p ${input:serialPort} monitor",
+            "command": "export IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf5.5_py3.12_env && if [ -f $HOME/esp/esp-idf/export.sh ]; then . $HOME/esp/esp-idf/export.sh > /dev/null; else . $HOME/.platformio/packages/framework-espidf/export.sh > /dev/null; fi && idf.py -p ${input:serialPort} monitor",
             "problemMatcher": [],
             "isBackground": true
         },
         {
             "label": "ESP-IDF: Build, Flash & Monitor",
             "type": "shell",
-            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py -p ${input:serialPort} build flash monitor",
+            "command": "export IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf5.5_py3.12_env && if [ -f $HOME/esp/esp-idf/export.sh ]; then . $HOME/esp/esp-idf/export.sh > /dev/null; else . $HOME/.platformio/packages/framework-espidf/export.sh > /dev/null; fi && idf.py -p ${input:serialPort} build flash monitor",
             "problemMatcher": [],
             "isBackground": true
         },
         {
             "label": "ESP-IDF: Clean",
             "type": "shell",
-            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py fullclean",
+            "command": "export IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf5.5_py3.12_env && if [ -f $HOME/esp/esp-idf/export.sh ]; then . $HOME/esp/esp-idf/export.sh > /dev/null; else . $HOME/.platformio/packages/framework-espidf/export.sh > /dev/null; fi && idf.py fullclean",
             "problemMatcher": []
         },
         {
             "label": "ESP-IDF: Set Target",
             "type": "shell",
-            "command": "source $HOME/esp/esp-idf/export.sh > /dev/null && idf.py set-target esp32s3",
+            "command": "export IDF_PYTHON_ENV_PATH=$HOME/.espressif/python_env/idf5.5_py3.12_env && if [ -f $HOME/esp/esp-idf/export.sh ]; then . $HOME/esp/esp-idf/export.sh > /dev/null; else . $HOME/.platformio/packages/framework-espidf/export.sh > /dev/null; fi && idf.py set-target esp32s3",
             "problemMatcher": []
         }
     ],

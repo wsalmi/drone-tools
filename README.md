@@ -112,7 +112,7 @@ drone-telemetry-monitor/
 ├── partitions.csv              # Custom partition table (3 MB app + 5 MB FAT)
 ├── components/
 │   ├── common/                 # Shared types, error codes, HAL base types
-│   ├── hal/                    # Hardware abstraction layer
+│   ├── hw_hal/                 # Hardware abstraction layer
 │   │   ├── include/            #   HAL headers (lora, nrf24, sdr, gps, display, etc.)
 │   │   └── src/                #   HAL implementations + HW Manager state machine
 │   ├── domain/                 # Business logic and data models
@@ -181,11 +181,14 @@ Configurable parameters include:
 Tests run on the host machine (x86) using mocked HAL interfaces:
 
 ```bash
-cd test/host
-mkdir -p build && cd build
-cmake ..
-make
-./run_tests
+# Configure host tests in a fresh build directory
+cmake -S test/host -B build/host
+
+# Build host tests
+cmake --build build/host
+
+# Run all tests via CTest
+ctest --test-dir build/host --output-on-failure
 ```
 
 **Frameworks:**

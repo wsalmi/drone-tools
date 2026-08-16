@@ -1,0 +1,237 @@
+# =============================================================================
+# Code Quality Review — Static Analysis Policy
+# =============================================================================
+# Defines pinned tool versions, blocking diagnostics, warning flags, suppression
+# rules, and preexisting backlog handling for reproducible static analysis.
+#
+# Validates: Requirements 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7
+# Properties: P20 (Static analysis with normalized baseline and suppressions)
+# =============================================================================
+
+schema_version: 1
+
+# ---------------------------------------------------------------------------
+# Pinned Tool Versions
+# ---------------------------------------------------------------------------
+# All analysis runs must use these exact versions for deterministic results.
+# Version changes require updating this policy and re-baselining diagnostics.
+tools:
+  gcc:
+    version: "13"
+    version_command: "gcc --version | head -1"
+    notes: "Ubuntu 24.04 / GitHub Actions ubuntu-latest default"
+
+  esp_idf:
+    version: "5.3"
+    toolchain: "xtensa-esp32s3-elf-gcc"
+    notes: "ESP-IDF v5.3 container image: espressif/idf:v5.3"
+
+  cmake:
+    version: "3.16+"
+    version_command: "cmake --version | head -1"
+
+  shellcheck:
+    version: "0.9"
+    version_command: "shellcheck --version | grep version:"
+    applies_to: "*.sh"
+
+  cppcheck:
+    version: "2.13"
+    version_command: "cppcheck --version"
+    optional: true
+    notes: "Used when available; not required for gate pass without it"
+
+# ---------------------------------------------------------------------------
+# Compile Commands Generation
+# ---------------------------------------------------------------------------
+compile_commands:
+  host:
+    method: "cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+    output: "build/host/compile_commands.json"
+    notes: "Generated during host configure step"
+
+  firmware:
+    method: "idf.py build generates compile_commands.json"
+    output: "build/firmware/compile_commands.json"
+    notes: "ESP-IDF generates this by default"
+
+# ---------------------------------------------------------------------------
+# Warning Flags — Host Build
+# ---------------------------------------------------------------------------
+# These flags are enforced during host configure/build.
+# New warnings from these flags block the gate when they appear in changed code.
+host_warnings:
+  enabled:
+    - "-Wall"
+    - "-Wextra"
+    - "-Wpedantic"
+  promoted_to_error:
+    - "-Werror=return-type"
+    - "-Werror=implicit-function-declaration"
+    - "-Werror=format"
+    - "-Werror=format-security"
+    - "-Werror=incompatible-pointer-types"
+    - "-Werror=int-conversion"
+
+# ---------------------------------------------------------------------------
+# Blocking Diagnostic Categories
+# ---------------------------------------------------------------------------
+# These diagnostic classes block CI (G3) unconditionally regardless of whether
+# the code is new or preexisting.
+blocking_categories:
+  - id: "bounds"
+    description: "Out-of-bounds access, buffer overflow"
+    patterns:
+      - "array-bounds"
+      - "buffer-overflow"
+      - "out-of-bounds"
+      - "stack-buffer-overflow"
+
+  - id: "lifetime"
+    description: "Use-after-free, dangling pointer, double free"
+    patterns:
+      - "use-after-free"
+      - "dangling"
+      - "double-free"
+      - "heap-use-after-free"
+
+  - id: "uninitialized"
+    description: "Use of uninitialized variable"
+    patterns:
+      - "uninitialized"
+      - "Wuninitialized"
+      - "maybe-uninitialized"
+      - "uninitvar"
+
+  - id: "overflow"
+    description: "Relevant integer overflow (not benign unsigned wrap)"
+    patterns:
+      - "signed-integer-overflow"
+      - "integer-overflow"
+      - "shift-overflow"
+
+  - id: "data_race"
+    description: "Data race or thread safety issue"
+    patterns:
+      - "data-race"
+      - "thread-safety"
+      - "ThreadSanitizer"
+
+  - id: "null_deref"
+    description: "Null pointer dereference"
+    patterns:
+      - "null-dereference"
+      - "nullPointer"
+      - "null-pointer"
+
+# ---------------------------------------------------------------------------
+# New Warning Policy
+# ---------------------------------------------------------------------------
+# A NEW warning in CHANGED code always blocks, per Requirement 11.4.
+new_warning_policy:
+  scope: "changed_lines"
+  action: "block"
+  description: >
+    Any compiler or analyzer warning emitted for a line that was added or
+    modified in the current change blocks the CI gate. This prevents
+    regressions regardless of the specific warning category.
+
+# ---------------------------------------------------------------------------
+# Suppression Rules
+# ---------------------------------------------------------------------------
+# Per Requirement 11.5: suppressions must be minimal, localized, and linked.
+suppressions:
+  required_format: "CQR-<AREA>-NNN"
+  id_pattern: "^CQR-[A-Z][A-Z0-9_]+-\\d{3}$"
+
+  rules:
+    - description: "Every suppression must include a CQR-ID in the comment"
+      enforcement: "scanner rejects suppressions without matching CQR-ID"
+      example: "// NOLINTNEXTLINE(*) CQR-STATIC-001: false positive on macro expansion"
+
+    - description: "Suppressions must be localized (pragma or inline, not global)"
+      enforcement: "scanner rejects file-level or project-level suppressions"
+      allowed_forms:
+        - "// NOLINTNEXTLINE"
+        - "#pragma GCC diagnostic push/pop"
+        - "// cppcheck-suppress"
+      prohibited_forms:
+        - "project-level .clang-tidy disable"
+        - "global cppcheck --suppress without file scope"
+        - "CMake add_compile_options(-Wno-*) without finding"
+
+    - description: "Suppression scope must be minimal"
+      enforcement: "push/pop must bracket the narrowest possible region"
+
+  validation:
+    reject_without_id: true
+    reject_global: true
+    reject_empty_justification: true
+
+# ---------------------------------------------------------------------------
+# Preexisting Backlog
+# ---------------------------------------------------------------------------
+# Known warnings from the baseline that don't block CI but are tracked.
+# Per Requirement 11.6: distinguish preexisting from new, define trajectory.
+preexisting_backlog:
+  policy: "tracked_non_blocking"
+  description: >
+    Preexisting diagnostics from the initial baseline are recorded in the
+    findings inventory. They do not block CI for unchanged code, but any new
+    occurrence in changed code IS blocking. The backlog must decrease over time.
+
+  trajectory:
+    review_interval: "per-release"
+    target: "zero preexisting warnings"
+    action_on_increase: "block — new preexisting items require a finding"
+
+  known_items:
+    - file: "main/data_pipeline.c"
+      diagnostic: "variadic macro"
+      severity: "Low"
+      finding_id: "CQR-STATIC-001"
+      notes: "ESP_LOG macros trigger ISO C variadic warning with -Wpedantic"
+
+    - file: "main/data_pipeline.c"
+      diagnostic: "unused variable"
+      severity: "Low"
+      finding_id: "CQR-STATIC-002"
+      notes: "Variable declared for future pipeline stage"
+
+# ---------------------------------------------------------------------------
+# Fingerprint Normalization
+# ---------------------------------------------------------------------------
+# Per Requirement 11.2: results must be deterministic for same commit.
+normalization:
+  remove:
+    - absolute_paths
+    - timestamps
+    - build_directory_prefix
+    - process_ids
+    - ansi_color_codes
+
+  replace:
+    absolute_path_prefix: "<repo>"
+    build_dir_prefix: "<build>"
+
+  description: >
+    All diagnostic output is normalized before fingerprinting to ensure
+    identical results regardless of the build machine, working directory,
+    or execution time.
+
+# ---------------------------------------------------------------------------
+# Affected Unit Requirement (Requirement 11.7)
+# ---------------------------------------------------------------------------
+# When remediation changes parsing, concurrency, ownership, or lifecycle,
+# static analysis MUST include those units.
+affected_unit_policy:
+  categories_requiring_analysis:
+    - "parsing"
+    - "concurrency"
+    - "ownership"
+    - "lifecycle"
+
+  enforcement: >
+    The static analysis runner checks git diff for files in the affected
+    categories and ensures they appear in the analysis report. Missing
+    affected units cause the gate to fail.

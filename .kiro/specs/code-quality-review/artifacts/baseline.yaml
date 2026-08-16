@@ -1,0 +1,444 @@
+# =============================================================================
+# Code Quality Review — Reproducible Baseline
+# =============================================================================
+# This file records the initial environment, canonical commands, and results
+# captured on a clean checkout. It satisfies Requirements 1.1–1.4, 1.6, 11.6,
+# and 12.10, and validates Property 1 (self-contained, repeatable baseline).
+#
+# All commands are designed to run in fresh build directories without depending
+# on unversioned local files, previous build state, or generated artifacts.
+# =============================================================================
+
+schema_version: 1
+
+# ---------------------------------------------------------------------------
+# Source and Environment
+# ---------------------------------------------------------------------------
+source:
+  commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+  commit_short: "3f5b8b3"
+  commit_message: "refactor: Rename hal component to hw_hal and update project structure"
+  commit_date: "2026-08-10T14:06:58-03:00"
+  repository: "source-me/drone-tools"
+  branch: "main"
+
+environment:
+  os: "macOS"
+  os_version: "26.5.2"
+  os_build: "25F84"
+  architecture: "x86_64"
+  shell: "zsh"
+
+toolchain:
+  esp_idf:
+    version: "v5.5.0"
+    path: "$HOME/.platformio/packages/framework-espidf"
+    source: "PlatformIO"
+    note: "CI uses espressif/idf:v5.3 Docker image; local is v5.5.0 via PlatformIO"
+    ci_version: "v5.3"
+  cmake:
+    version: "4.3.3"
+  host_compiler:
+    id: "AppleClang"
+    version: "21.0.0 (clang-2100.1.1.101)"
+  firmware_compiler:
+    id: "xtensa-esp-elf-gcc"
+    version: "14.2.0 (crosstool-NG esp-14.2.0_20241119)"
+  target: "esp32s3"
+
+dependencies:
+  unity:
+    version: "v2.6.0"
+    source: "FetchContent (URL)"
+    url: "https://github.com/ThrowTheSwitch/Unity/archive/refs/tags/v2.6.0.tar.gz"
+  theft:
+    version: "v0.4.5"
+    source: "FetchContent (URL)"
+    url: "https://github.com/silentbicycle/theft/archive/refs/tags/v0.4.5.tar.gz"
+  cjson:
+    version: "v1.7.18"
+    source: "FetchContent (URL)"
+    url: "https://github.com/DaveGamble/cJSON/archive/refs/tags/v1.7.18.tar.gz"
+  espressif_cjson:
+    note: "Managed component used by firmware build (espressif__cjson)"
+    source: "ESP Component Registry"
+
+configuration_files:
+  sdkconfig_defaults:
+    path: "sdkconfig.defaults"
+    versioned: true
+    policy: "versioned_and_validated"
+    policy_rationale: |
+      sdkconfig.defaults is required by the firmware build. ESP-IDF applies it
+      as the base configuration when no sdkconfig exists or when set-target is run.
+      It defines the target chip, CPU frequency, flash size, PSRAM, FreeRTOS,
+      WiFi, BLE, USB, SPI, UART, SD, partition table, logging, and watchdog.
+      The file MUST be versioned and validated; removal would require documenting
+      each effective default, which is impractical for 30+ entries.
+    note: "Defines target, CPU freq, flash, PSRAM, FreeRTOS, WiFi, BLE, USB, SPI, UART, SD, partitions, logging, and watchdog"
+    key_entries:
+      - "CONFIG_IDF_TARGET=\"esp32s3\""
+      - "CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240"
+      - "CONFIG_ESPTOOLPY_FLASHSIZE=\"8MB\""
+      - "CONFIG_SPIRAM=y"
+      - "CONFIG_PARTITION_TABLE_CUSTOM=y"
+      - "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions.csv\""
+      - "CONFIG_ESP_TASK_WDT_TIMEOUT_S=10"
+    validation: "tools/code_quality/validate_config_files.py"
+    test: "test/host/code_quality/test_config_files.py"
+  partitions_csv:
+    path: "partitions.csv"
+    versioned: true
+    policy: "versioned_and_validated"
+    policy_rationale: |
+      partitions.csv defines the custom partition layout required by the firmware.
+      It is referenced by sdkconfig.defaults via CONFIG_PARTITION_TABLE_CUSTOM=y
+      and CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv". The firmware
+      build uses this file to generate the partition table binary. Removal would
+      revert to the default single-factory layout, which is insufficient for
+      the project's NVS + PHY + factory_app + FAT storage needs.
+    layout: "nvs(24K) + phy(4K) + factory_app(3MB) + fat_storage(~5MB)"
+    referenced_by: "sdkconfig.defaults (CONFIG_PARTITION_TABLE_CUSTOM_FILENAME)"
+    validation: "tools/code_quality/validate_config_files.py"
+    test: "test/host/code_quality/test_config_files.py"
+
+# ---------------------------------------------------------------------------
+# Canonical Commands
+# ---------------------------------------------------------------------------
+# These commands are the single source of truth for building and testing.
+# They MUST be executable in fresh directories on a clean checkout without
+# relying on previous build artifacts or unversioned local state.
+# ---------------------------------------------------------------------------
+
+commands:
+  host_configure:
+    id: "host-configure"
+    description: "Configure host tests (CMake) in a fresh build/host directory"
+    canonical: |
+      rm -rf build/host && mkdir -p build/host
+      cmake -S test/host -B build/host
+    working_directory: "<project_root>"
+    prerequisites: ["cmake >= 3.16", "C compiler (cc)"]
+    clean_directory: "build/host"
+
+  host_build:
+    id: "host-build"
+    description: "Build host tests after configuration"
+    canonical: |
+      cmake --build build/host
+    working_directory: "<project_root>"
+    prerequisites: ["host-configure must succeed first"]
+    clean_directory: "build/host"
+
+  host_test:
+    id: "host-test"
+    description: "Run CTest host tests after build"
+    canonical: |
+      ctest --test-dir build/host --output-on-failure
+    working_directory: "<project_root>"
+    prerequisites: ["host-build must succeed first"]
+    clean_directory: "build/host"
+
+  firmware_set_target:
+    id: "firmware-set-target"
+    description: "Configure ESP-IDF firmware for ESP32-S3 in a fresh build/firmware directory"
+    canonical: |
+      rm -rf build/firmware && mkdir -p build/firmware
+      . $IDF_PATH/export.sh
+      idf.py -B build/firmware set-target esp32s3
+    working_directory: "<project_root>"
+    prerequisites: ["ESP-IDF (v5.3 in CI, v5.5.0 local via PlatformIO)", "IDF_PATH set"]
+    clean_directory: "build/firmware"
+
+  firmware_build:
+    id: "firmware-build"
+    description: "Build ESP32-S3 firmware after set-target"
+    canonical: |
+      . $IDF_PATH/export.sh
+      idf.py -B build/firmware build
+    working_directory: "<project_root>"
+    prerequisites: ["firmware-set-target must succeed first"]
+    clean_directory: "build/firmware"
+
+# ---------------------------------------------------------------------------
+# Baseline Execution Results
+# ---------------------------------------------------------------------------
+# Captured on the initial commit with the known issues present.
+# Each execution records exit code, classification, duration, and a log
+# reference. Failures are preserved as evidence for findings.
+# ---------------------------------------------------------------------------
+
+executions:
+  # -------------------------------------------------------------------------
+  # ORIGINAL BASELINE (historical — preserved as evidence of pre-fix state)
+  # -------------------------------------------------------------------------
+  - id: "host-configure"
+    command: "cmake -S test/host -B build/host"
+    exit_code: 0
+    classification: "success"
+    duration_seconds: 15.0
+    log_reference: "artifacts/logs/host-configure.log"
+    notes: |
+      CMake configures successfully despite referencing nonexistent path
+      components/hal/include in COMPONENT_INCLUDE_DIRS and hal_mocks target.
+      Configure does not validate include directory existence.
+    warnings:
+      - "CMP0169 deprecated FetchContent_Populate usage for theft"
+      - "cJSON CMakeLists.txt cmake_minimum_required < 3.10 compatibility warning"
+
+  - id: "host-build"
+    command: "cmake --build build/host"
+    exit_code: 2
+    classification: "failure"
+    duration_seconds: 5.1
+    log_reference: "artifacts/logs/host-build.log"
+    failure:
+      type: "compilation_error"
+      file: "test/mocks/hal_lora_mock.c"
+      line: 9
+      message: "fatal error: 'hal_lora.h' file not found"
+      root_cause: |
+        test/host/CMakeLists.txt line 110 sets hal_mocks include to
+        ${COMPONENTS_DIR}/hal/include which does not exist.
+        The correct path is ${COMPONENTS_DIR}/hw_hal/include.
+        The same incorrect path appears in COMPONENT_INCLUDE_DIRS (line 127).
+      affected_targets:
+        - "hal_mocks"
+        - "all downstream targets depending on hal_mocks"
+      finding_id: "CQR-BUILD-001"
+
+  - id: "host-test"
+    command: "ctest --test-dir build/host --output-on-failure"
+    exit_code: null
+    classification: "blocked"
+    duration_seconds: 0
+    log_reference: null
+    notes: "Cannot execute; blocked by host-build failure"
+    finding_id: "CQR-BUILD-001"
+
+  - id: "firmware-set-target"
+    command: "idf.py -B build/firmware set-target esp32s3"
+    exit_code: 0
+    classification: "success"
+    duration_seconds: 16.4
+    log_reference: "artifacts/logs/firmware-set-target.log"
+    notes: |
+      Configures successfully. ESP-IDF resolves components/hw_hal correctly.
+      Uses sdkconfig.defaults and partitions.csv from the repository root.
+
+  - id: "firmware-build"
+    command: "idf.py -B build/firmware build"
+    exit_code: 0
+    classification: "success"
+    duration_seconds: 240
+    log_reference: "artifacts/logs/firmware-build.log"
+    notes: |
+      Firmware compiles and links successfully. Produces:
+        - drone-telemetry-monitor.bin (1076624 bytes)
+        - bootloader/bootloader.bin (22528 bytes)
+        - partition_table/partition-table.bin (3072 bytes)
+    outputs:
+      - "build/firmware/drone-telemetry-monitor.bin"
+      - "build/firmware/bootloader/bootloader.bin"
+      - "build/firmware/partition_table/partition-table.bin"
+      - "build/firmware/flasher_args.json"
+
+  # -------------------------------------------------------------------------
+  # POST-REMEDIATION VERIFICATION (Task 2.4 — after CQR-BUILD-001, DOCS-001, DOCS-002 fixes)
+  # -------------------------------------------------------------------------
+  - id: "host-configure-post-fix"
+    command: "rm -rf build/host_verify && cmake -S test/host -B build/host_verify"
+    exit_code: 0
+    classification: "success"
+    duration_seconds: 13.8
+    log_reference: null
+    notes: |
+      Fresh configure in build/host_verify succeeds. CMake resolves
+      components/hw_hal/include correctly. All targets generated.
+    warnings:
+      - "CMP0169 deprecated FetchContent_Populate usage for theft"
+      - "cJSON CMakeLists.txt cmake_minimum_required < 3.10 compatibility warning"
+    finding_ids: ["CQR-BUILD-001"]
+    verification_context: "Task 2.4 — re-execution after fix from Task 2.1"
+
+  - id: "host-build-post-fix"
+    command: "cmake --build build/host_verify"
+    exit_code: 0
+    classification: "success"
+    duration_seconds: null
+    log_reference: null
+    notes: |
+      Build completes successfully with all 22 test targets compiled.
+      Only warnings are variadic macro and unused variable in data_pipeline.c
+      (pre-existing, unrelated to path fix).
+    finding_ids: ["CQR-BUILD-001"]
+    verification_context: "Task 2.4 — re-execution after fix from Task 2.1"
+
+  - id: "host-test-post-fix"
+    command: "ctest --test-dir build/host_verify --output-on-failure"
+    exit_code: 0
+    classification: "success"
+    duration_seconds: 25.6
+    log_reference: null
+    notes: |
+      All 22 CTest-registered tests pass:
+        test_framework_smoke, test_pbt_smoke, test_config_store,
+        test_aircraft_registry, test_hal_gps, test_protocol_signatures,
+        test_mavlink_decoder, test_hw_manager, test_remoteid_decoder,
+        test_geolocation_service, test_elrs_decoder, test_protocol_classifier,
+        test_telemetry_decoder, test_detection_service, test_spectrum_analyzer,
+        test_pilot_locator, test_alert_engine, test_ui_manager,
+        test_screen_scanner, test_screen_map, test_data_logger,
+        test_data_pipeline.
+      100% tests passed, 0 tests failed out of 22.
+    finding_ids: ["CQR-BUILD-001"]
+    verification_context: "Task 2.4 — re-execution after fix from Task 2.1"
+
+  - id: "doc-smoke-post-fix"
+    command: "python tools/code_quality/check_doc_references.py README.md ."
+    exit_code: 0
+    classification: "success"
+    duration_seconds: 0.1
+    log_reference: null
+    notes: |
+      PASSED: all README.md references resolve correctly.
+      Validates canonical commands exist, hw_hal path resolves,
+      no reference to nonexistent run_tests script.
+    finding_ids: ["CQR-DOCS-001", "CQR-DOCS-002"]
+    verification_context: "Task 2.4 — re-execution after fixes from Task 2.2"
+
+  - id: "config-validation-post-fix"
+    command: "python tools/code_quality/validate_config_files.py"
+    exit_code: 0
+    classification: "success"
+    duration_seconds: 0.1
+    log_reference: null
+    notes: |
+      Configuration validation passes. sdkconfig.defaults and partitions.csv
+      are versioned, cross-referenced, and consistent with the build.
+    finding_ids: []
+    verification_context: "Task 2.4 — re-execution after validation from Task 2.3"
+
+  - id: "config-test-suite-post-fix"
+    command: "python -m pytest test/host/code_quality/test_config_files.py -v"
+    exit_code: 0
+    classification: "success"
+    duration_seconds: 0.1
+    log_reference: null
+    notes: |
+      All 15 config file tests pass:
+        6 positive (real repo validation),
+        3 orphan reference tests,
+        3 missing required file tests,
+        3 ambiguous configuration tests.
+    finding_ids: []
+    verification_context: "Task 2.4 — re-execution after validation from Task 2.3"
+
+# ---------------------------------------------------------------------------
+# Repetition Validation
+# ---------------------------------------------------------------------------
+# Property 1 requires that commands produce equivalent results in fresh
+# directories on the same commit. Validated by running in two separate
+# directories (build/host_baseline_1 and build/host_baseline_2).
+# ---------------------------------------------------------------------------
+
+repetition_validation:
+  host_configure:
+    run_1_exit_code: 0
+    run_2_exit_code: 0
+    equivalent: true
+    notes: "Both runs configure successfully with identical warnings"
+
+  host_build:
+    run_1_exit_code: 2
+    run_2_exit_code: 2
+    equivalent: true
+    notes: |
+      Both runs fail identically at hal_lora_mock.c:9 with
+      'hal_lora.h' file not found. The failure is deterministic and
+      traceable to the same incorrect path in CMakeLists.txt.
+
+  firmware_set_target:
+    note: "Validated once; full firmware build takes ~4 minutes"
+    run_1_exit_code: 0
+    equivalent: true
+
+  firmware_build:
+    note: "Validated once; firmware build is deterministic for same IDF version"
+    run_1_exit_code: 0
+    equivalent: true
+
+# ---------------------------------------------------------------------------
+# Expected Results After Remediation
+# ---------------------------------------------------------------------------
+# After fixing CQR-BUILD-001 (hal → hw_hal path), the expected results are:
+# ---------------------------------------------------------------------------
+
+expected_after_remediation:
+  host_configure:
+    exit_code: 0
+    classification: "success"
+  host_build:
+    exit_code: 0
+    classification: "success"
+    notes: "All targets compile without error after path correction"
+  host_test:
+    exit_code: 0
+    classification: "success"
+    notes: "All CTest-registered tests pass (framework smoke + PBT smoke at minimum)"
+  firmware_set_target:
+    exit_code: 0
+    classification: "success"
+  firmware_build:
+    exit_code: 0
+    classification: "success"
+
+# ---------------------------------------------------------------------------
+# Known Issues Captured in Baseline
+# ---------------------------------------------------------------------------
+# These are observations recorded for the findings inventory (Task 1.2).
+# This baseline does not fix them; it preserves them as reproducible evidence.
+# ---------------------------------------------------------------------------
+
+known_issues:
+  - id: "CQR-BUILD-001"
+    title: "Host build references nonexistent components/hal instead of components/hw_hal"
+    severity: "High"
+    evidence:
+      - "test/host/CMakeLists.txt:110 — ${COMPONENTS_DIR}/hal/include in hal_mocks"
+      - "test/host/CMakeLists.txt:127 — ${COMPONENTS_DIR}/hal/include in COMPONENT_INCLUDE_DIRS"
+    reproduction: "cmake -S test/host -B build/host && cmake --build build/host"
+    observed_result: "exit code 2, fatal error: 'hal_lora.h' file not found"
+
+  - id: "CQR-DOCS-001"
+    title: "README references ./run_tests which does not exist"
+    severity: "Medium"
+    evidence:
+      - "README.md testing section instructs: './run_tests'"
+    reproduction: "Follow README testing instructions on a clean checkout"
+    observed_result: "No script or target named run_tests exists"
+
+  - id: "CQR-DOCS-002"
+    title: "README references components/hal/ in project structure, not components/hw_hal/"
+    severity: "Low"
+    evidence:
+      - "README.md project structure diagram lists 'hal/' instead of 'hw_hal/'"
+    reproduction: "Compare README structure to actual filesystem"
+    observed_result: "Mismatch between documented and actual component name"
+
+  - id: "CQR-CI-001"
+    title: "CI only runs firmware build; host tests are not executed"
+    severity: "High"
+    evidence:
+      - ".github/workflows/build-and-release.yml — single 'build' job with idf.py build only"
+    reproduction: "Review workflow file"
+    observed_result: "No host-test, static-analysis, or host-build job"
+
+  - id: "CQR-ENV-001"
+    title: "Local ESP-IDF version (v5.5.0) differs from CI (v5.3)"
+    severity: "Low"
+    evidence:
+      - "CI uses espressif/idf:v5.3 Docker image"
+      - "Local PlatformIO installs framework-espidf v5.5.0"
+    reproduction: "Compare idf.py --version output to CI container tag"
+    observed_result: "Version mismatch; builds succeed on both but APIs may differ"

@@ -1,0 +1,284 @@
+# =============================================================================
+# Code Quality Review — Policy Definition
+# =============================================================================
+# This file defines severity levels, valid status transitions, gate
+# requirements, suppression/skip rules, and acceptance criteria for the
+# code quality review process.
+#
+# Validates: Requirements 2.1, 2.2, 2.4, 2.6, 10.5, 12.2, 12.8, 12.9
+# Properties: P2 (finding completeness), P22 (fail-closed acceptance)
+# =============================================================================
+
+schema_version: 1
+
+# ---------------------------------------------------------------------------
+# Severity Levels and Implications
+# ---------------------------------------------------------------------------
+severity:
+  levels:
+    - name: Critical
+      description: "Immediate safety, data integrity, or security risk; blocks acceptance unconditionally"
+      implications:
+        blocks_acceptance: true
+        accepted_risk_permitted: false
+        mandatory_gates: ["G2", "G3", "G4", "G6"]
+        max_open_for_acceptance: 0
+        requires_hil_when_applicable: true
+
+    - name: High
+      description: "Significant functional or reliability risk; blocks acceptance"
+      implications:
+        blocks_acceptance: true
+        accepted_risk_permitted: true
+        mandatory_gates: ["G2", "G3", "G4", "G6"]
+        max_open_for_acceptance: 0
+        requires_hil_when_applicable: true
+
+    - name: Medium
+      description: "Moderate risk with workaround; tracked but does not block acceptance alone"
+      implications:
+        blocks_acceptance: false
+        accepted_risk_permitted: true
+        mandatory_gates: ["G2", "G4"]
+        max_open_for_acceptance: null  # unlimited if accepted risk is valid
+        requires_hil_when_applicable: false
+
+    - name: Low
+      description: "Minor improvement; cosmetic or minor technical debt"
+      implications:
+        blocks_acceptance: false
+        accepted_risk_permitted: true
+        mandatory_gates: ["G4"]
+        max_open_for_acceptance: null
+        requires_hil_when_applicable: false
+
+  rationale_required: true
+  rationale_fields:
+    - impact
+    - probability
+
+# ---------------------------------------------------------------------------
+# Valid Status Transitions
+# ---------------------------------------------------------------------------
+status_transitions:
+  valid_statuses:
+    - OPEN
+    - IN_REMEDIATION
+    - VERIFYING
+    - CLOSED
+    - ACCEPTED_RISK
+
+  allowed_transitions:
+    OPEN:
+      - IN_REMEDIATION      # owner + cause/strategy assigned
+      - ACCEPTED_RISK       # approval + deadline/condition
+    IN_REMEDIATION:
+      - VERIFYING           # fix + regression test added
+    VERIFYING:
+      - CLOSED              # all applicable gates green
+      - IN_REMEDIATION      # failure/reopening
+    CLOSED:
+      - OPEN                # regression or evidence invalidated
+    ACCEPTED_RISK:
+      - OPEN                # condition met or risk changed
+
+  # Requirements for each terminal/special status
+  status_requirements:
+    CLOSED:
+      required_fields:
+        - root_cause
+        - "remediation.strategy"
+        - "remediation.change_refs"
+        - "regression.test_ids"
+        - "regression.remediated_result"
+        - "verification.gates"
+      conditions:
+        - "All applicable mandatory gates must be green"
+        - "At least one regression test or equivalent proof"
+        - "Linked requirements have evidence of satisfaction"
+
+    ACCEPTED_RISK:
+      required_fields:
+        - "accepted_risk.owner"
+        - "accepted_risk.justification"
+        - "accepted_risk.review_date"
+      conditions:
+        - "Severity must not be Critical"
+        - "Does not turn a red gate green"
+        - "Owner is a named individual or role"
+        - "Review date is in the future or condition is specified"
+
+    IN_REMEDIATION:
+      required_fields:
+        - owner
+        - root_cause
+        - "remediation.strategy"
+
+# ---------------------------------------------------------------------------
+# Gate Requirements per Status
+# ---------------------------------------------------------------------------
+gates:
+  definitions:
+    G0:
+      name: "Baseline"
+      description: "Clean checkout reproduces environment and commands"
+      mandatory: true
+      applies_to: ["all"]
+
+    G1:
+      name: "Inventory"
+      description: "Schema valid, IDs unique, evidence and severity present"
+      mandatory: true
+      applies_to: ["all"]
+
+    G2:
+      name: "Host Fast"
+      description: "Configure/build/CTest pass; no unauthorized skip"
+      mandatory: true
+      applies_to: ["CLOSED", "acceptance"]
+
+    G3:
+      name: "Security"
+      description: "Sanitizers, warnings, static analysis pass"
+      mandatory: true
+      applies_to: ["CLOSED"]
+      severity_filter: ["Critical", "High"]
+
+    G4:
+      name: "Firmware"
+      description: "ESP-IDF build completes without error"
+      mandatory: true
+      applies_to: ["CLOSED", "acceptance"]
+
+    G5:
+      name: "Conditional HIL"
+      description: "Hardware-in-the-loop when doubles cannot validate"
+      mandatory: false
+      applies_to: ["CLOSED"]
+      condition: "Required when finding modifies USB/SPI/ISR/reconnection behavior"
+
+    G6:
+      name: "Acceptance"
+      description: "Conjunction of all mandatory gates + policy"
+      mandatory: true
+      applies_to: ["acceptance"]
+
+  # Gate result values
+  result_values:
+    - green     # passed
+    - red       # failed
+    - skipped   # with justification and finding link
+    - pending   # not yet executed
+
+# ---------------------------------------------------------------------------
+# Suppression and Skip Rules
+# ---------------------------------------------------------------------------
+suppressions:
+  rules:
+    - description: "Every suppression must reference a CQR-ID finding"
+      enforcement: "validator rejects suppressions without valid CQR-ID"
+    - description: "Suppressions must be localized (file/line scope, not global)"
+      enforcement: "validator rejects global/project-wide suppressions"
+    - description: "Suppression justification is mandatory"
+      enforcement: "validator rejects empty justification"
+
+  required_fields:
+    - finding_id       # CQR-<AREA>-NNN format
+    - justification    # why the suppression is needed
+    - scope            # file:line or minimal region
+
+  prohibited:
+    - "Global suppressions without a finding"
+    - "Suppressions for Critical severity diagnostics"
+
+skips:
+  rules:
+    - description: "Skipped tests must reference a CQR-ID finding"
+      enforcement: "CI and validator flag skips without CQR-ID"
+    - description: "Skips require a deadline or reactivation condition"
+      enforcement: "validator rejects skips without deadline"
+
+  required_fields:
+    - finding_id       # CQR-<AREA>-NNN format
+    - reason           # why the test is skipped
+    - deadline         # ISO date or condition for reactivation
+
+# ---------------------------------------------------------------------------
+# Acceptance Criteria (Property 22: Fail-Closed)
+# ---------------------------------------------------------------------------
+acceptance:
+  decision_values:
+    - ACCEPTED
+    - NOT_ACCEPTED
+
+  criteria:
+    - id: "ACC-1"
+      description: "All mandatory gates are green"
+      condition: "Every gate with mandatory=true has result=green"
+      blocks_when_false: true
+
+    - id: "ACC-2"
+      description: "Zero open Critical findings"
+      condition: "No finding with severity=Critical has status in [OPEN, IN_REMEDIATION, VERIFYING]"
+      blocks_when_false: true
+
+    - id: "ACC-3"
+      description: "Zero open High findings"
+      condition: "No finding with severity=High has status in [OPEN, IN_REMEDIATION, VERIFYING]"
+      blocks_when_false: true
+
+    - id: "ACC-4"
+      description: "Every CLOSED finding has complete evidence"
+      condition: "All CLOSED findings satisfy status_requirements.CLOSED"
+      blocks_when_false: true
+
+    - id: "ACC-5"
+      description: "Final matrix covers each finding exactly once"
+      condition: "Matrix rows match findings 1:1 with no duplicates or omissions"
+      blocks_when_false: true
+
+    - id: "ACC-6"
+      description: "ACCEPTED_RISK findings meet policy"
+      condition: "All ACCEPTED_RISK findings satisfy status_requirements.ACCEPTED_RISK"
+      blocks_when_false: true
+
+  # The review is ACCEPTED if and only if ALL criteria are true
+  decision_rule: "ACCEPTED if and only if all criteria with blocks_when_false=true are satisfied"
+  fail_closed: true
+
+# ---------------------------------------------------------------------------
+# Finding ID Format
+# ---------------------------------------------------------------------------
+finding_id:
+  format: "CQR-<AREA>-NNN"
+  pattern: "^CQR-[A-Z][A-Z0-9_]+-\\d{3}$"
+  areas:
+    - BUILD
+    - DOCS
+    - CI
+    - REMOTEID
+    - QUEUES
+    - NRF24
+    - SDR
+    - USB
+    - SPI
+    - SPECTRUM
+    - READINESS
+    - DEBT
+    - STATIC
+    - ENV
+
+# ---------------------------------------------------------------------------
+# Mandatory Categories (minimum initial coverage)
+# ---------------------------------------------------------------------------
+mandatory_categories:
+  - build
+  - docs
+  - ci
+  - memory
+  - parsing
+  - concurrency
+  - lifecycle
+  - readiness
+  - debt
+  - static-analysis

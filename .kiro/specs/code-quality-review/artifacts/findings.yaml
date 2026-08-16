@@ -1,0 +1,812 @@
+# =============================================================================
+# Code Quality Review — Canonical Findings Inventory
+# =============================================================================
+# Satisfies Requirements 2.1–2.6, 10.5, 12.2
+# Schema rules:
+#   - id: stable, unique, never reused; format CQR-<AREA>-NNN
+#   - baseline.commit and original evidence are immutable
+#   - current_evidence tracks current file:line separately
+#   - severity_rationale is mandatory
+#   - CLOSED requires: root_cause, remediation, regression/proof, gates green
+#   - ACCEPTED_RISK requires: owner, justification, review_date/condition
+#   - Each skip/suppression/debt references a finding
+# =============================================================================
+
+schema_version: 1
+
+findings:
+  # ===========================================================================
+  # BUILD / HOST PATH FINDINGS
+  # ===========================================================================
+
+  - id: CQR-BUILD-001
+    title: "Host build references nonexistent components/hal instead of components/hw_hal"
+    category: build
+    severity: High
+    severity_rationale:
+      impact: "Host tests cannot compile; all host-side regressions are undetectable"
+      probability: "Deterministic — occurs on every host-build attempt"
+    status: VERIFYING
+    owner: "host-build/CMakeLists"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "test/host/CMakeLists.txt:110", excerpt_hash: "hal_mocks_include_dir"}
+        - {location: "test/host/CMakeLists.txt:127", excerpt_hash: "COMPONENT_INCLUDE_DIRS"}
+      reproduction:
+        - "rm -rf build/host && cmake -S test/host -B build/host && cmake --build build/host"
+      observed_result: "exit code 2; fatal error: 'hal_lora.h' file not found at hal_lora_mock.c:9"
+    current_evidence:
+      - {commit: "working-tree", location: "test/host/CMakeLists.txt:125", note: "hw_hal/include in hal_mocks target"}
+      - {commit: "working-tree", location: "test/host/CMakeLists.txt:141", note: "hw_hal/include in COMPONENT_INCLUDE_DIRS"}
+    root_cause: "Rename from hal to hw_hal did not update host test CMake references"
+    remediation:
+      strategy: "Replace ${COMPONENTS_DIR}/hal/include with ${COMPONENTS_DIR}/hw_hal/include"
+      change_refs:
+        - "test/host/CMakeLists.txt"
+    regression:
+      test_ids: ["test_framework_smoke", "test_pbt_smoke"]
+      defective_result: "cmake --build exits 2 with file-not-found"
+      remediated_result: "cmake --build exits 0; CTest discovers and passes 22 tests"
+      verification_run:
+        directory: "build/host_verify"
+        configure_exit: 0
+        build_exit: 0
+        ctest_exit: 0
+        tests_passed: 22
+        tests_failed: 0
+    requirements: ["3.1", "3.5", "12.1", "12.4"]
+    verification:
+      gates: {G2_host_fast: "pass", G4_firmware: "pending", G3_security: "pending"}
+      artifact_refs:
+        - "build/host_verify — fresh configure/build/CTest run with 22/22 tests passing"
+      pending_gates_reason: "CI workflow and firmware build not yet validated with this change"
+    accepted_risk: null
+
+  # ===========================================================================
+  # DOCUMENTATION / CONFIGURATION FINDINGS
+  # ===========================================================================
+
+  - id: CQR-DOCS-001
+    title: "README references ./run_tests which does not exist"
+    category: docs
+    severity: Medium
+    severity_rationale:
+      impact: "New contributors cannot run tests; documented workflow is broken"
+      probability: "Every developer following README will encounter this"
+    status: VERIFYING
+    owner: "docs/README"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "README.md:testing-section", excerpt_hash: "run_tests_reference"}
+      reproduction:
+        - "Follow README testing instructions on a clean checkout"
+      observed_result: "No script or target named run_tests exists in the repository"
+    current_evidence:
+      - {commit: "working-tree", location: "README.md:184-191", note: "Testing section now documents cmake/ctest canonical commands"}
+    root_cause: "README was not updated when test infrastructure changed"
+    remediation:
+      strategy: "Replace ./run_tests with canonical cmake/ctest commands or create the entry point"
+      change_refs:
+        - "README.md"
+    regression:
+      test_ids: ["doc_smoke_check_doc_references"]
+      defective_result: "Referenced command does not exist"
+      remediated_result: "Documented commands execute host tests successfully; doc smoke test passes"
+      verification_run:
+        tool: "tools/code_quality/check_doc_references.py README.md ."
+        exit_code: 0
+        result: "PASSED: all README.md references resolve correctly"
+    requirements: ["3.2", "3.5", "3.6", "12.4", "12.5"]
+    verification:
+      gates: {G2_host_fast: "pass", doc_smoke: "pass", G4_firmware: "pending", G3_security: "pending"}
+      artifact_refs:
+        - "check_doc_references.py — all references resolve"
+        - "build/host_verify — canonical commands from README execute with exit 0"
+      pending_gates_reason: "CI workflow not yet updated to run doc smoke test as a gate"
+    accepted_risk: null
+
+  - id: CQR-DOCS-002
+    title: "README references components/hal/ in project structure, not components/hw_hal/"
+    category: docs
+    severity: Low
+    severity_rationale:
+      impact: "Confusing documentation; cosmetic mismatch"
+      probability: "Every reader of the project structure section"
+    status: VERIFYING
+    owner: "docs/README"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "README.md:project-structure", excerpt_hash: "hal_listing"}
+      reproduction:
+        - "Compare README structure diagram to actual filesystem listing"
+      observed_result: "README lists 'hal/' but filesystem has 'hw_hal/'"
+    current_evidence:
+      - {commit: "working-tree", location: "README.md:115", note: "Project structure now shows hw_hal/ matching filesystem"}
+    root_cause: "Rename from hal to hw_hal did not update documentation"
+    remediation:
+      strategy: "Replace hal/ with hw_hal/ in the project structure section"
+      change_refs:
+        - "README.md"
+    regression:
+      test_ids: ["doc_smoke_check_doc_references"]
+      defective_result: "Mismatch between documented and actual component name"
+      remediated_result: "Documentation matches filesystem; doc smoke test passes"
+      verification_run:
+        tool: "tools/code_quality/check_doc_references.py README.md ."
+        exit_code: 0
+        result: "PASSED: all README.md references resolve correctly"
+    requirements: ["3.2", "3.5", "12.5"]
+    verification:
+      gates: {doc_smoke: "pass", G4_firmware: "pending", G3_security: "pending"}
+      artifact_refs:
+        - "check_doc_references.py — all path references resolve with correct capitalization"
+      pending_gates_reason: "CI workflow not yet updated to run doc smoke test as a gate"
+    accepted_risk: null
+
+  # ===========================================================================
+  # CI / ANALYSIS FINDINGS
+  # ===========================================================================
+
+  - id: CQR-CI-001
+    title: "CI only runs firmware build; host tests, sanitizers, and analysis are absent"
+    category: ci
+    severity: High
+    severity_rationale:
+      impact: "No automated verification of host tests, memory safety, or static analysis"
+      probability: "Every CI run accepts changes without host/analysis validation"
+    status: OPEN
+    owner: "ci/workflows"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: ".github/workflows/build-and-release.yml:build-job", excerpt_hash: "single_idf_build"}
+      reproduction:
+        - "Review workflow file: only 'idf.py build' is executed"
+      observed_result: "Single 'build' job with idf.py build; no host-test, static-analysis, or sanitizer jobs"
+    current_evidence:
+      - {commit: "3f5b8b3", location: ".github/workflows/build-and-release.yml:28-37"}
+    root_cause: "CI was set up for firmware only; host tests never integrated"
+    remediation:
+      strategy: "Add host-test, host-sanitizers, static-analysis, and firmware-build as separate jobs using canonical commands"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "CI passes with firmware build alone"
+      remediated_result: "CI fails when any mandatory gate fails (host, analysis, firmware)"
+    requirements: ["4.1", "4.2", "4.3", "4.5", "4.6", "4.7", "12.3", "12.9"]
+    verification:
+      gates: {G4_firmware: "pending", G2_host_fast: "pending", G3_security: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  - id: CQR-ENV-001
+    title: "Local ESP-IDF version (v5.5.0) differs from CI (v5.3)"
+    category: ci
+    severity: Low
+    severity_rationale:
+      impact: "API differences between versions could cause silent incompatibilities"
+      probability: "Low — firmware builds succeed on both; risk is latent"
+    status: OPEN
+    owner: "ci/environment"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: ".github/workflows/build-and-release.yml:14", excerpt_hash: "idf_v5.3_container"}
+        - {location: "local PlatformIO framework-espidf v5.5.0", excerpt_hash: "local_v5.5"}
+      reproduction:
+        - "Compare idf.py --version output locally to CI container tag"
+      observed_result: "Local v5.5.0 vs CI v5.3 Docker image"
+    current_evidence:
+      - {commit: "3f5b8b3", location: ".github/workflows/build-and-release.yml:14"}
+    root_cause: "Local development environment uses PlatformIO-managed IDF which auto-updates"
+    remediation:
+      strategy: "Document version policy; pin local to v5.3 or explicitly test against both"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Version mismatch not tested"
+      remediated_result: "Single documented IDF version or explicit multi-version CI matrix"
+    requirements: ["1.1", "4.3", "12.10"]
+    verification:
+      gates: {}
+      artifact_refs: []
+    accepted_risk: null
+
+  # ===========================================================================
+  # REMOTEID PARSING FINDINGS
+  # ===========================================================================
+
+  - id: CQR-REMOTEID-001
+    title: "Received CRC is calculated but never compared to frame CRC"
+    category: parsing
+    severity: High
+    severity_rationale:
+      impact: "Corrupted or spoofed packets with bad CRC are accepted as valid telemetry"
+      probability: "Every frame from an untrusted source; integrity check is completely bypassed"
+    status: OPEN
+    owner: "services/remoteid"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/services/src/remoteid_decoder.c:remoteid_validate_frame", excerpt_hash: "no_crc_comparison"}
+      reproduction:
+        - "Inspect remoteid_validate_frame: CRC-8 table and remoteid_crc8() exist but validate_frame only checks message type, never compares calculated vs received CRC"
+      observed_result: "remoteid_crc8() is defined but never invoked in the decode/validate path; frame validation uses message type check as a proxy"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/services/src/remoteid_decoder.c:350-410"}
+    root_cause: "CRC validation was implemented as a utility but never integrated into the frame validation or decode flow"
+    remediation:
+      strategy: "In remoteid_validate_frame and decode paths, calculate CRC over the protocol-defined region and compare to received CRC byte; reject on mismatch with RID_REJECT_CRC"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Frame with invalid CRC is accepted and decoded"
+      remediated_result: "Frame with invalid CRC returns RID_REJECT_CRC; integrity_errors increments exactly once"
+    requirements: ["5.3", "5.4", "5.9", "12.1", "12.4", "12.6"]
+    verification:
+      gates: {G2_host_fast: "pending", G3_security: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  - id: CQR-REMOTEID-002
+    title: "Coordinate validity uses logical OR instead of AND (lat OR lon != invalid)"
+    category: parsing
+    severity: High
+    severity_rationale:
+      impact: "Partial/invalid coordinates published as valid position; incorrect geolocation"
+      probability: "Any frame where one coordinate is sentinel and the other is not"
+    status: OPEN
+    owner: "services/remoteid"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/services/src/remoteid_decoder.c:153", excerpt_hash: "has_position_or_logic"}
+        - {location: "components/services/src/remoteid_decoder.c:172", excerpt_hash: "has_operator_location_or_logic"}
+      reproduction:
+        - "Inspect decode_location(): `out->has_position = (lat_raw != REMOTEID_LAT_INVALID || lon_raw != REMOTEID_LON_INVALID)`"
+        - "Inspect decode_system(): `out->has_operator_location = (op_lat_raw != 0 || op_lon_raw != 0)`"
+      observed_result: "A single valid coordinate (e.g., valid lat, invalid lon) sets has_position=true"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/services/src/remoteid_decoder.c:153"}
+      - {commit: "3f5b8b3", location: "components/services/src/remoteid_decoder.c:172"}
+    root_cause: "Logical OR was used where AND is required; no range/sentinel validation per ASTM F3411"
+    remediation:
+      strategy: "Validate lat and lon independently for sentinel, scale, and intervals [-90,90]/[-180,180]; use AND to set has_position; same for operator location"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "has_position=true with only one valid coordinate"
+      remediated_result: "has_position=true only when BOTH lat and lon are individually valid"
+    requirements: ["5.5", "5.6", "5.7", "12.1", "12.4"]
+    verification:
+      gates: {G2_host_fast: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  - id: CQR-REMOTEID-003
+    title: "No bounds validation on declared size, offsets, or field access"
+    category: parsing
+    severity: High
+    severity_rationale:
+      impact: "Potential out-of-bounds read on malformed frames; memory safety violation"
+      probability: "Any received frame shorter than expected message offsets"
+    status: OPEN
+    owner: "services/remoteid"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/services/src/remoteid_decoder.c:decode_location", excerpt_hash: "no_per_field_bounds_check"}
+        - {location: "components/services/src/remoteid_decoder.c:decode_basic_id", excerpt_hash: "no_bounds_memcpy"}
+      reproduction:
+        - "Pass a frame with valid header but truncated payload (e.g., 10 bytes instead of 25) to decode_single_message"
+      observed_result: "decode_location reads at fixed offsets (up to byte 24) without verifying buffer has those bytes; relies solely on caller's minimum frame check"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/services/src/remoteid_decoder.c:112-175"}
+    root_cause: "Individual message decoders trust the caller's frame-level minimum check without per-field validation"
+    remediation:
+      strategy: "Validate minimum size, declared size, and each offset+field_size <= available_length before dereferencing; use parse-then-commit into staging"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Truncated frame causes out-of-bounds access (ASan detects)"
+      remediated_result: "Truncated frame is rejected with observable error; no OOB access"
+    requirements: ["5.1", "5.2", "5.7", "5.8", "12.1", "12.6"]
+    verification:
+      gates: {G2_host_fast: "pending", G3_security: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  # ===========================================================================
+  # QUEUE / CONCURRENCY FINDINGS
+  # ===========================================================================
+
+  - id: CQR-QUEUE-001
+    title: "Detection queue drops are silent — no metric, no segmentation, no policy"
+    category: concurrency
+    severity: High
+    severity_rationale:
+      impact: "Telemetry/detection events silently lost; no observability of overload or degradation"
+      probability: "Any queue-full condition; xQueueSend result logged at DEBUG only"
+    status: OPEN
+    owner: "services/detection"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/services/src/detection_service.c:98-107", excerpt_hash: "enqueue_detection_silent_drop"}
+      reproduction:
+        - "Inspect enqueue_detection(): on xQueueSend failure, only ESP_LOGD is emitted; no counter, no reason segmentation"
+      observed_result: "Drop is logged at DEBUG level; no metric exposed; no received/enqueued/dropped counters"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/services/src/detection_service.c:98-107"}
+    root_cause: "Queue was implemented with minimal error handling; drop observability was not required initially"
+    remediation:
+      strategy: "Add received/enqueued/dropped counters per queue/source/reason; expose snapshot API; use non-blocking DROP_NEW policy"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Queue full produces only debug log; no metric"
+      remediated_result: "Queue full increments exactly one dropped[reason]; snapshot is consistent"
+    requirements: ["6.1", "6.2", "6.3", "6.8", "12.1", "12.6"]
+    verification:
+      gates: {G2_host_fast: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  - id: CQR-QUEUE-002
+    title: "WiFi/BLE/SDR callbacks enqueue without checking or documenting result ownership"
+    category: concurrency
+    severity: Medium
+    severity_rationale:
+      impact: "Producer ignores xQueueSend result semantics; ownership unclear on rejection"
+      probability: "Every callback invocation that calls enqueue_detection"
+    status: OPEN
+    owner: "services/detection"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/services/src/detection_service.c:117-130", excerpt_hash: "wifi_frame_callback"}
+        - {location: "components/services/src/detection_service.c:140-153", excerpt_hash: "ble_adv_callback"}
+      reproduction:
+        - "Callbacks call enqueue_detection() but ignore the bool return; no explicit ownership transfer documented"
+      observed_result: "Return value of enqueue_detection is discarded by callers"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/services/src/detection_service.c:117-153"}
+    root_cause: "Ownership contract (ACCEPTED=queue owns copy; REJECTED=producer retains) was never formalized"
+    remediation:
+      strategy: "Document ownership contract; check enqueue return; apply explicit policy on rejection"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Callback ignores queue rejection without documented policy"
+      remediated_result: "Each callback checks result and applies documented ownership/drop policy"
+    requirements: ["6.1", "6.5", "6.8"]
+    verification:
+      gates: {G2_host_fast: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  # ===========================================================================
+  # NRF24 FINDINGS
+  # ===========================================================================
+
+  - id: CQR-NRF24-001
+    title: "NRF24 always reads and publishes 32-byte payload regardless of actual width"
+    category: parsing
+    severity: High
+    severity_rationale:
+      impact: "Stale/residual bytes from previous packets exposed to consumers; incorrect payload length"
+      probability: "Every reception — driver hardcodes NRF24_MAX_PAYLOAD_LEN (32)"
+    status: OPEN
+    owner: "hw_hal/nrf24"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/hw_hal/src/hal_nrf24.c:hal_nrf24_listen_channel:payload_read", excerpt_hash: "fixed_32_read"}
+        - {location: "components/hw_hal/src/hal_nrf24.c:hal_nrf24_listen_channel:payload_len_set", excerpt_hash: "fixed_32_len"}
+      reproduction:
+        - "Inspect hal_nrf24_listen_channel(): nrf24_read_payload(packet->payload, NRF24_MAX_PAYLOAD_LEN) at line ~360; packet->payload_len = NRF24_MAX_PAYLOAD_LEN at line ~365"
+      observed_result: "Always reads 32 bytes; always sets payload_len=32; no dynamic width query (R_RX_PL_WID) and no static width per pipe"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/hw_hal/src/hal_nrf24.c:355-366"}
+    root_cause: "Driver was designed for fixed 32-byte promiscuous sniffing; dynamic/static width modes not implemented"
+    remediation:
+      strategy: "Query R_RX_PL_WID in dynamic mode or use static_width[pipe] in static mode; validate width [1,32]; read only validated bytes; zero remainder"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Payload of 10 bytes is published as 32 bytes with stale residue"
+      remediated_result: "Payload of 10 bytes has length=10; bytes [10,32) are zeroed; consumers respect length"
+    requirements: ["8.1", "8.2", "8.3", "8.4", "8.5", "8.6", "8.7", "12.1", "12.4"]
+    verification:
+      gates: {G2_host_fast: "pending", G5_hil: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  # ===========================================================================
+  # SDR / USB FINDINGS
+  # ===========================================================================
+
+  - id: CQR-SDR-001
+    title: "SDR USB enumeration assumes device address is always 1"
+    category: lifecycle
+    severity: Medium
+    severity_rationale:
+      impact: "Reconnected device at a different address will not be found; init fails after disconnect/reconnect"
+      probability: "After any USB disconnect+reconnect cycle, address may change"
+    status: OPEN
+    owner: "hw_hal/sdr"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/hw_hal/src/hal_sdr.c:usb_wait_for_device:address_1", excerpt_hash: "hardcoded_address_1"}
+      reproduction:
+        - "Inspect usb_wait_for_device(): usb_host_device_open(s_sdr.client_handle, 1, &s_sdr.dev_handle) at line ~212"
+      observed_result: "Always tries to open device at address 1; does not enumerate available devices"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/hw_hal/src/hal_sdr.c:212"}
+    root_cause: "Simplified enumeration for single-device case; USB spec allows different address on re-enumeration"
+    remediation:
+      strategy: "Use NEW_DEV event to get actual enumerated address; store address and descriptors per generation; do not assume address 1"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Reconnection at address != 1 fails with ERR_HAL_SDR_NO_DEVICE"
+      remediated_result: "Reconnection at any valid address succeeds; generation isolates handles"
+    requirements: ["7.3", "7.7", "7.8", "12.1", "12.4"]
+    verification:
+      gates: {G2_host_fast: "pending", G5_hil: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  - id: CQR-SDR-002
+    title: "SDR uses fixed vTaskDelay as proof of transfer completion"
+    category: lifecycle
+    severity: Medium
+    severity_rationale:
+      impact: "Race condition — transfer may not be complete after delay; premature buffer access"
+      probability: "Under load or slow USB bus, 5ms/10ms delay is insufficient"
+    status: OPEN
+    owner: "hw_hal/sdr"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/hw_hal/src/hal_sdr.c:rtl_ctrl_transfer:delay_10ms", excerpt_hash: "ctrl_delay_completion"}
+        - {location: "components/hw_hal/src/hal_sdr.c:hal_sdr_read_iq:delay_5ms", excerpt_hash: "bulk_delay_completion"}
+      reproduction:
+        - "Inspect rtl_ctrl_transfer(): vTaskDelay(pdMS_TO_TICKS(10)) after usb_host_transfer_submit_control as only completion mechanism"
+        - "Inspect hal_sdr_read_iq(): vTaskDelay(pdMS_TO_TICKS(5)) after usb_host_transfer_submit as completion wait"
+      observed_result: "Fixed delays substitute for transfer completion callback/event; no actual completion check"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/hw_hal/src/hal_sdr.c:185"}
+      - {commit: "3f5b8b3", location: "components/hw_hal/src/hal_sdr.c:338-345"}
+    root_cause: "Transfer completion callbacks were not implemented; delay used as simplification"
+    remediation:
+      strategy: "Use transfer completion callback or synchronous API; on timeout request cancellation and reconcile; keep buffer/context valid until terminal state"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Transfer 'completion' relies on fixed delay; no actual confirmation"
+      remediated_result: "Transfer success determined by callback/event; timeout triggers cancel+reconcile"
+    requirements: ["7.4", "7.5", "7.6", "7.8", "12.1", "12.4"]
+    verification:
+      gates: {G2_host_fast: "pending", G5_hil: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  # ===========================================================================
+  # SPI ARBITRATION FINDINGS
+  # ===========================================================================
+
+  - id: CQR-SPI-001
+    title: "No SPI bus arbitration — modules share bus without generation token or serialized swap"
+    category: concurrency
+    severity: Medium
+    severity_rationale:
+      impact: "Concurrent SPI access from LoRa/NRF24 if hw_manager swap races with active I/O"
+      probability: "During hot-swap transitions; mutex protects state but not active SPI transactions"
+    status: OPEN
+    owner: "hw_hal/hw_manager"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/hw_hal/src/hw_manager.c:handle_switch_to_nrf24", excerpt_hash: "no_bus_quiesce"}
+        - {location: "components/hw_hal/src/hw_manager.c:poll_modules", excerpt_hash: "mutex_release_before_swap"}
+      reproduction:
+        - "Inspect handle_switch_to_nrf24(): deactivates LoRa then inits NRF24 without quiescing active SPI operations or token validation"
+        - "poll_modules() releases mutex before calling handle_switch_to_nrf24(), allowing concurrent RF task SPI access"
+      observed_result: "No generation token; no quiesce→release→reconfigure→acquire sequence; RF task may be mid-SPI when swap begins"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/hw_hal/src/hw_manager.c:175-200"}
+      - {commit: "3f5b8b3", location: "components/hw_hal/src/hw_manager.c:240-260"}
+    root_cause: "hw_manager manages state transitions but lacks bus-level arbitration with active I/O consumers"
+    remediation:
+      strategy: "Introduce generation token; serialize quiesce→release→reconfigure→acquire; reject stale-token I/O with ESP_ERR_INVALID_STATE before SPI"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Module continues SPI I/O during bus swap"
+      remediated_result: "Stale token returns error before SPI; swap completes without concurrent access"
+    requirements: ["7.1", "7.2", "7.9", "12.1", "12.6"]
+    verification:
+      gates: {G2_host_fast: "pending", G5_hil: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  # ===========================================================================
+  # READINESS / ROLLBACK FINDINGS
+  # ===========================================================================
+
+  - id: CQR-READY-001
+    title: "app_main unconditionally announces 'Ready!' regardless of module initialization results"
+    category: readiness
+    severity: High
+    severity_rationale:
+      impact: "Operator sees 'Ready' when required subsystems have failed; masks degraded/failed state"
+      probability: "Deterministic — Ready! is printed after all phases regardless of any error"
+    status: OPEN
+    owner: "main/readiness"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "main/main.c:app_main:ready_announcement", excerpt_hash: "unconditional_ready"}
+      reproduction:
+        - "Inspect app_main(): after all init phases complete, 'Ready! (%lums)' is displayed unconditionally at line ~385"
+        - "No check: if any required subsystem failed, Ready is still shown"
+      observed_result: "Display shows 'Ready!' even if HW Manager, Detection Service, or other required modules failed"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "main/main.c:385"}
+    root_cause: "No readiness evaluation logic; init phases log failures but do not aggregate into a readiness state"
+    remediation:
+      strategy: "Classify subsystems as required/optional; evaluate readiness from results; announce Ready only when all required are OPERATIONAL; else announce DEGRADED or FAILED"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Ready announced with failed required subsystem"
+      remediated_result: "Ready only when all required subsystems operational; DEGRADED/FAILED otherwise"
+    requirements: ["9.1", "9.2", "9.3", "9.4", "12.1", "12.4"]
+    verification:
+      gates: {G2_host_fast: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  - id: CQR-READY-002
+    title: "No init rollback — partial init failure leaves resources from previous steps active"
+    category: readiness
+    severity: Medium
+    severity_rationale:
+      impact: "Failed init can leave tasks/handles/bus in inconsistent state; retry impossible without restart"
+      probability: "Any module init failure after partial acquisition (e.g., SPI bus allocated but device add fails)"
+    status: OPEN
+    owner: "main/readiness"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "main/main.c:init_phase_hal", excerpt_hash: "no_rollback_on_partial_failure"}
+        - {location: "main/main.c:init_phase_tasks", excerpt_hash: "early_return_without_cleanup"}
+      reproduction:
+        - "If data_pipeline_init() fails, init_phase_tasks() returns early but prior services (detection, spectrum, alert) remain initialized"
+      observed_result: "No generation-based rollback; partial initialization leaves orphan resources"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "main/main.c:330-380"}
+    root_cause: "Linear init without dependency tracking or rollback mechanism"
+    remediation:
+      strategy: "Stack-based acquisition with reverse-order release on failure; generation tokens for retry isolation"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Partial failure leaves active resources; retry creates duplicates"
+      remediated_result: "Partial failure releases acquired resources in safe order; retry is clean"
+    requirements: ["7.2", "9.5", "9.8", "9.9", "12.1", "12.6"]
+    verification:
+      gates: {G2_host_fast: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  # ===========================================================================
+  # SPECTRUM ANALYZER FINDINGS
+  # ===========================================================================
+
+  - id: CQR-SPECTRUM-001
+    title: "Spectrum Analyzer accepts SDR in any state except INACTIVE — no operational allowlist"
+    category: lifecycle
+    severity: Medium
+    severity_rationale:
+      impact: "Spectrum init proceeds when SDR is in ERROR, INITIALIZING, or other non-operational state"
+      probability: "SDR in ERROR or INITIALIZING during system startup or after USB disconnect"
+    status: OPEN
+    owner: "services/spectrum"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/services/src/spectrum_analyzer.c:spectrum_analyzer_init:sdr_check", excerpt_hash: "inactive_only_check"}
+      reproduction:
+        - "Inspect spectrum_analyzer_init(): only checks `if (sdr_status == HAL_STATUS_INACTIVE) return ESP_ERR_INVALID_STATE`"
+        - "Any other state (ERROR, INITIALIZING) is accepted as 'available' and hal_sdr_init is called"
+      observed_result: "SDR in ERROR state passes the check; spectrum init attempts hal_sdr_init which may fail or produce inconsistent state"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/services/src/spectrum_analyzer.c:202-204"}
+    root_cause: "Check was written as 'reject only INACTIVE' rather than 'accept only OPERATIONAL'"
+    remediation:
+      strategy: "Accept SDR only in OPERATIONAL state; refuse UNINITIALIZED, INITIALIZING, ERROR, STOPPING, DISCONNECTED; Spectrum consumes capability, does not reinitialize driver"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Spectrum init proceeds when SDR is in ERROR/INITIALIZING"
+      remediated_result: "Spectrum init refuses non-OPERATIONAL SDR with observable reason"
+    requirements: ["9.6", "9.7", "9.8", "12.1", "12.4", "12.6"]
+    verification:
+      gates: {G2_host_fast: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  # ===========================================================================
+  # PLACEHOLDER / TECHNICAL DEBT FINDINGS
+  # ===========================================================================
+
+  - id: CQR-DEBT-001
+    title: "domain_placeholder.c is included in production firmware source list"
+    category: debt
+    severity: Low
+    severity_rationale:
+      impact: "Empty placeholder compiled and linked into production binary; masks real functionality gaps"
+      probability: "Deterministic — always present in firmware build"
+    status: OPEN
+    owner: "domain/CMakeLists"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/domain/CMakeLists.txt:2", excerpt_hash: "domain_placeholder_in_srcs"}
+        - {location: "components/domain/src/domain_placeholder.c:1-7", excerpt_hash: "empty_placeholder_body"}
+      reproduction:
+        - "Inspect components/domain/CMakeLists.txt SRCS list: includes 'src/domain_placeholder.c'"
+        - "File contains only a comment header; no functional code"
+      observed_result: "Placeholder is compiled into production firmware without serving any implementation purpose"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/domain/CMakeLists.txt:2"}
+      - {commit: "3f5b8b3", location: "components/domain/src/domain_placeholder.c:1-7"}
+    root_cause: "Initial component scaffolding used placeholder to satisfy CMake non-empty SRCS requirement; now obsolete with real sources"
+    remediation:
+      strategy: "Remove from SRCS list; real sources (config_store, aircraft_registry, protocol_signatures) are sufficient"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Placeholder present in production source list and artifact map"
+      remediated_result: "Placeholder removed; firmware builds without it; CI gate detects reintroduction"
+    requirements: ["10.1", "10.3", "10.4", "12.1", "12.4"]
+    verification:
+      gates: {G4_firmware: "pending", placeholder_scan: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  - id: CQR-DEBT-002
+    title: "hal_placeholder.c is included in production firmware source list"
+    category: debt
+    severity: Low
+    severity_rationale:
+      impact: "Empty placeholder compiled into production binary; includes hal_common.h unnecessarily"
+      probability: "Deterministic — always present in firmware build"
+    status: OPEN
+    owner: "hw_hal/CMakeLists"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/hw_hal/CMakeLists.txt:2", excerpt_hash: "hal_placeholder_in_srcs"}
+        - {location: "components/hw_hal/src/hal_placeholder.c:1-9", excerpt_hash: "hal_placeholder_body"}
+      reproduction:
+        - "Inspect components/hw_hal/CMakeLists.txt SRCS list: includes 'src/hal_placeholder.c'"
+      observed_result: "Placeholder includes hal_common.h but provides no implementation; linked into firmware"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/hw_hal/CMakeLists.txt:2"}
+      - {commit: "3f5b8b3", location: "components/hw_hal/src/hal_placeholder.c:1-9"}
+    root_cause: "Initial scaffolding; real HAL sources are now implemented"
+    remediation:
+      strategy: "Remove from SRCS list; existing HAL sources are sufficient"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Placeholder in production source list"
+      remediated_result: "Removed; CI gate prevents reintroduction"
+    requirements: ["10.1", "10.3", "10.4", "12.1", "12.4"]
+    verification:
+      gates: {G4_firmware: "pending", placeholder_scan: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  - id: CQR-DEBT-003
+    title: "services_placeholder.c is included in production firmware source list"
+    category: debt
+    severity: Low
+    severity_rationale:
+      impact: "Empty placeholder compiled into production binary"
+      probability: "Deterministic — always present in firmware build"
+    status: OPEN
+    owner: "services/CMakeLists"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/services/CMakeLists.txt:2", excerpt_hash: "services_placeholder_in_srcs"}
+        - {location: "components/services/src/services_placeholder.c:1-8", excerpt_hash: "services_placeholder_body"}
+      reproduction:
+        - "Inspect components/services/CMakeLists.txt SRCS list: includes 'src/services_placeholder.c'"
+      observed_result: "Placeholder contains only a comment; compiled and linked into firmware"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/services/CMakeLists.txt:2"}
+      - {commit: "3f5b8b3", location: "components/services/src/services_placeholder.c:1-8"}
+    root_cause: "Initial scaffolding; real service sources are now implemented"
+    remediation:
+      strategy: "Remove from SRCS list; existing service sources are sufficient"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "Placeholder in production source list"
+      remediated_result: "Removed; CI gate prevents reintroduction"
+    requirements: ["10.1", "10.3", "10.4", "12.1", "12.4"]
+    verification:
+      gates: {G4_firmware: "pending", placeholder_scan: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+  # ===========================================================================
+  # STATIC ANALYSIS FINDINGS
+  # ===========================================================================
+
+  - id: CQR-ANALYSIS-001
+    title: "No static analysis policy, tools, or versioned diagnostics baseline"
+    category: static-analysis
+    severity: Medium
+    severity_rationale:
+      impact: "No automated detection of memory safety, uninitialized variables, data races, or new warnings"
+      probability: "Every code change proceeds without static verification"
+    status: OPEN
+    owner: "ci/analysis"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: ".github/workflows/build-and-release.yml", excerpt_hash: "no_analysis_job"}
+      reproduction:
+        - "Review CI workflow and repository: no cppcheck, clang-analyzer, or ASan/UBSan/TSan configuration"
+      observed_result: "No static analysis tooling configured; no diagnostics policy versioned"
+    current_evidence:
+      - {commit: "3f5b8b3", location: ".github/workflows/build-and-release.yml"}
+    root_cause: "Static analysis was never integrated into the development workflow"
+    remediation:
+      strategy: "Define versioned policy; add ASan+UBSan, TSan, and compiler warnings as CI gates; normalize fingerprints"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: "No static analysis executes"
+      remediated_result: "Static analysis runs in CI; Critical/High diagnostics block acceptance"
+    requirements: ["11.1", "11.2", "11.3", "11.4", "11.5", "11.6", "11.7"]
+    verification:
+      gates: {G3_security: "pending"}
+      artifact_refs: []
+    accepted_risk: null
+
+# =============================================================================
+# CLOSURE AND ACCEPTED_RISK POLICY
+# =============================================================================
+# Schema enforcement (validated by tools/code_quality/ when implemented):
+#
+# CLOSED requires ALL of:
+#   - root_cause: non-null
+#   - remediation.change_refs: non-empty
+#   - regression.test_ids: non-empty OR regression.defective_result documents equivalent proof
+#   - verification.gates: all applicable gates green
+#   - requirements: linked criteria satisfied
+#
+# ACCEPTED_RISK requires ALL of:
+#   - owner: named individual or team
+#   - accepted_risk.justification: non-empty rationale
+#   - accepted_risk.review_condition: date or condition for reassessment
+#   - accepted_risk.approval: documented approval reference
+#   - severity: NOT Critical (Critical cannot be accepted)
+#   - Does not turn a red gate green
+#
+# SKIPS / SUPPRESSIONS:
+#   - Every test skip, diagnostic suppression, or intentional debt
+#     must reference a CQR-* finding ID
+#   - Finding must be OPEN or ACCEPTED_RISK with valid justification
+# =============================================================================
