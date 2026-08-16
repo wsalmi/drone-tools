@@ -29,10 +29,18 @@ static const char *TAG = "hal_nrf24";
  * Pin Configuration (M5Stack Cardputer ADV EXT 14-pin — SPI3/VSPI)
  * ======================================================================== */
 
+/*
+ * NOTE: MOSI/MISO/CLK MUST NOT overlap with the display's SPI2 pins
+ * (35/36/37, see hal_display.c). They previously did, which caused the
+ * GPIO matrix to reroute the display's SPI2 output pins to SPI3 as soon
+ * as this module (or hal_lora.c, sharing the same bus) initialized,
+ * disconnecting the display after boot. Values below match the physical
+ * SPI3 expansion bus wiring (shared with hal_lora.c and hal_sd.c).
+ */
 #define NRF24_SPI_HOST          SPI3_HOST
-#define NRF24_PIN_MOSI          GPIO_NUM_35
-#define NRF24_PIN_MISO          GPIO_NUM_37
-#define NRF24_PIN_CLK           GPIO_NUM_36
+#define NRF24_PIN_MOSI          GPIO_NUM_14
+#define NRF24_PIN_MISO          GPIO_NUM_39
+#define NRF24_PIN_CLK           GPIO_NUM_40
 #define NRF24_PIN_CS            GPIO_NUM_9
 #define NRF24_PIN_CE            GPIO_NUM_10
 

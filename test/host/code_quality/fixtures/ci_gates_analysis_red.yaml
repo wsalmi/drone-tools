@@ -1,0 +1,5 @@
+# CI gate results: static-analysis red, others green → REJECTED
+host-test: green
+host-sanitizers: green
+static-analysis: red
+firmware-build: green

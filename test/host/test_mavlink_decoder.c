@@ -491,11 +491,13 @@ void test_is_valid_frame_corrupted_returns_false(void) {
  * ======================================================================== */
 
 void test_decode_unsupported_msg_id_returns_unknown_fmt(void) {
-    /* Message ID 100 is not supported */
+    /* Message ID 100 is not supported. Since there is no known crc_extra
+     * for it, the decoder cannot validate CRC — but that must not be
+     * conflated with an integrity failure. The msg_id is checked before
+     * CRC validation, so this correctly reports ERR_DECODE_UNKNOWN_FMT
+     * regardless of the (garbage) CRC bytes below. */
     uint8_t payload[10] = {0};
     uint8_t frame[32];
-    /* We can't properly build frame for unknown msg because we don't have crc_extra,
-     * so the CRC check will fail first, returning ERR_DECODE_CRC_FAIL */
     frame[0] = 0xFE;
     frame[1] = 10;
     frame[2] = 0x01;
@@ -503,14 +505,13 @@ void test_decode_unsupported_msg_id_returns_unknown_fmt(void) {
     frame[4] = 0x01;
     frame[5] = 100; /* unsupported msg_id */
     memcpy(&frame[6], payload, 10);
-    /* Put garbage CRC */
+    /* Garbage CRC — irrelevant since msg_id is rejected before CRC check */
     frame[16] = 0x00;
     frame[17] = 0x00;
 
     decoded_telemetry_t out;
     esp_err_t err = mavlink_decode(frame, 18, &out);
-    /* Will fail with CRC error since msg_id=100 has no known crc_extra */
-    TEST_ASSERT_EQUAL(ERR_DECODE_CRC_FAIL, err);
+    TEST_ASSERT_EQUAL(ERR_DECODE_UNKNOWN_FMT, err);
 }
 
 /* ========================================================================

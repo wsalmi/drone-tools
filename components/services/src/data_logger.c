@@ -36,6 +36,12 @@
 /** @brief File rotation counter max */
 #define MAX_ROTATION_FILES  999
 
+/** @brief Consecutive SD write failures (while reportedly mounted) before
+ *  the card is treated as unavailable, so records fall back to the RAM
+ *  buffer and hal_sd_is_mounted() transitioning back to true later
+ *  triggers a proper flush instead of silently losing data forever. */
+#define MAX_CONSECUTIVE_SD_WRITE_FAILURES  3
+
 /* ========================================================================
  * Protocol name lookup table
  * ======================================================================== */
@@ -82,6 +88,7 @@ typedef struct {
 
 static bool s_initialized = false;
 static bool s_sd_was_available = false;
+static uint8_t s_consecutive_write_failures = 0;
 static circular_buffer_t s_buffer;
 
 /** Current CSV file handle */
@@ -108,6 +115,8 @@ static void generate_filename(char *path, size_t path_len)
              (unsigned long)s_session_id, s_rotation_index, LOG_FILE_EXT);
 }
 
+#include <sys/stat.h>
+
 /**
  * @brief Open a new CSV file for writing (creates with header).
  */
@@ -119,6 +128,7 @@ static esp_err_t open_new_file(void)
         s_file_open = false;
     }
 
+    mkdir(LOG_DIR, 0777);
     generate_filename(s_current_path, sizeof(s_current_path));
 
     esp_err_t err = hal_sd_open(s_current_path, "w", &s_current_file);
@@ -146,12 +156,19 @@ static esp_err_t open_new_file(void)
 
 /**
  * @brief Rotate to a new file (increment rotation index and open new file).
+ *
+ * When the rotation index for the current session exhausts
+ * MAX_ROTATION_FILES, advance to a new session ID instead of wrapping
+ * the index back to 0 — wrapping would reuse the same filename
+ * (session_XXXX_000.csv) and silently overwrite the first file of the
+ * current session.
  */
 static esp_err_t rotate_file(void)
 {
     s_rotation_index++;
     if (s_rotation_index > MAX_ROTATION_FILES) {
-        s_rotation_index = 0; /* wrap around */
+        s_session_id++;
+        s_rotation_index = 0;
     }
     return open_new_file();
 }
@@ -218,6 +235,7 @@ esp_err_t data_logger_init(void)
     s_current_file_size = 0;
 
     /* Check if SD is available and open initial file */
+    s_consecutive_write_failures = 0;
     s_sd_was_available = hal_sd_is_mounted();
     if (s_sd_was_available) {
         esp_err_t err = open_new_file();
@@ -256,7 +274,25 @@ esp_err_t data_logger_log(const log_record_t *record)
     if (hal_sd_is_mounted()) {
         esp_err_t err = write_csv_line(line, total_len);
         if (err == ESP_OK) {
+            s_consecutive_write_failures = 0;
             return ESP_OK;
+        }
+
+        /* Write failed even though the card reports as mounted (e.g. I/O
+         * error without the card being physically removed). After enough
+         * consecutive failures, stop trusting hal_sd_is_mounted() and mark
+         * the SD as unavailable so data_logger_check_sd() can detect a
+         * later true availability transition and flush the buffer instead
+         * of silently dropping records once the buffer wraps. */
+        if (s_consecutive_write_failures < UINT8_MAX) {
+            s_consecutive_write_failures++;
+        }
+        if (s_consecutive_write_failures >= MAX_CONSECUTIVE_SD_WRITE_FAILURES) {
+            s_sd_was_available = false;
+            if (s_file_open) {
+                hal_sd_close(&s_current_file);
+                s_file_open = false;
+            }
         }
         /* Fall through to buffer if write fails */
     }
@@ -324,7 +360,11 @@ esp_err_t data_logger_check_sd(void)
 
     bool sd_available = hal_sd_is_mounted();
 
-    /* Detect transition from unavailable to available */
+    /* Detect transition from unavailable to available. This also covers
+     * the case where data_logger_log() forced s_sd_was_available to false
+     * after repeated write failures while hal_sd_is_mounted() kept
+     * reporting true — once writes start succeeding again this branch
+     * flushes the buffer and resets the failure counter. */
     if (sd_available && !s_sd_was_available) {
         /* SD just became available — flush buffer */
         if (!s_file_open) {
@@ -334,7 +374,10 @@ esp_err_t data_logger_check_sd(void)
             }
         }
         esp_err_t err = data_logger_flush_buffer();
-        s_sd_was_available = true;
+        if (err == ESP_OK) {
+            s_sd_was_available = true;
+            s_consecutive_write_failures = 0;
+        }
         return err;
     }
 

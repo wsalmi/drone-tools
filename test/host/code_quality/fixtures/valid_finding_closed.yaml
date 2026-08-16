@@ -1,0 +1,35 @@
+# Valid fixture: A properly CLOSED finding with all required fields.
+# Expected: validator PASSES
+
+schema_version: 1
+findings:
+  - id: CQR-BUILD-001
+    title: "Host build references nonexistent components/hal"
+    category: build
+    severity: High
+    severity_rationale:
+      impact: "host tests cannot compile"
+      probability: "every build attempt fails"
+    status: CLOSED
+    owner: "test/host"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "test/host/CMakeLists.txt:110", excerpt_hash: "abc123"}
+      reproduction: ["cmake -S test/host -B build/host && cmake --build build/host"]
+      observed_result: "exit code 2, fatal error: hal_lora.h not found"
+    current_evidence:
+      - {commit: "def456", location: "test/host/CMakeLists.txt:110"}
+    root_cause: "Path references components/hal which was renamed to components/hw_hal"
+    remediation:
+      strategy: "Replace hal with hw_hal in CMakeLists.txt"
+      change_refs: ["commit:def456"]
+    regression:
+      test_ids: ["test_hal_path_resolution"]
+      defective_result: "compilation error"
+      remediated_result: "exit code 0"
+    requirements: ["3.1", "3.5", "12.1", "12.4"]
+    verification:
+      gates: {G2: "green", G4: "green"}
+      artifact_refs: ["host-build.log"]
+    accepted_risk: null

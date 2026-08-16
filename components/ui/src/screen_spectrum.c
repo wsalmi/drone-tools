@@ -1,16 +1,18 @@
 /**
  * @file screen_spectrum.c
- * @brief Spectrum Analyzer screen implementation — waterfall display with protocol markers.
+ * @brief RF Activity Monitor screen implementation — live RF channels & receivers status.
  *
- * Renders spectrum data from the spectrum_analyzer service as a power vs frequency
- * graph with protocol frequency marker overlays. Uses hal_display draw primitives.
- *
- * Validates: Requirements 12.1, 12.4
+ * Displays live RF channel activity (WiFi 2.4GHz hopping, BLE, LoRa 915MHz, GPS)
+ * with signal indicators and status metrics.
  */
 
 #include "screen_spectrum.h"
 #include "hal_display.h"
-#include "spectrum_analyzer.h"
+#include "hal_lora.h"
+#include "hal_wifi_scanner.h"
+#include "hal_ble_scanner.h"
+#include "hal_gps.h"
+#include "hw_manager.h"
 #include "ui_manager.h"
 #include <string.h>
 #include <stdio.h>
@@ -22,130 +24,6 @@
 static screen_spectrum_state_t s_state = {0};
 
 /* ========================================================================
- * Helper: Map power dBm value to pixel Y coordinate
- * ======================================================================== */
-
-static uint16_t power_to_y(float power_dbm)
-{
-    /* Clamp to display range */
-    if (power_dbm < (float)SCREEN_SPECTRUM_POWER_MIN_DBM) {
-        power_dbm = (float)SCREEN_SPECTRUM_POWER_MIN_DBM;
-    }
-    if (power_dbm > (float)SCREEN_SPECTRUM_POWER_MAX_DBM) {
-        power_dbm = (float)SCREEN_SPECTRUM_POWER_MAX_DBM;
-    }
-
-    /* Map range [MIN, MAX] dBm to [graph_bottom, graph_top] pixels */
-    float range = (float)(SCREEN_SPECTRUM_POWER_MAX_DBM - SCREEN_SPECTRUM_POWER_MIN_DBM);
-    float normalized = (power_dbm - (float)SCREEN_SPECTRUM_POWER_MIN_DBM) / range;
-
-    uint16_t graph_top = SCREEN_SPECTRUM_CONTENT_Y + 2;
-    uint16_t graph_bottom = graph_top + SCREEN_SPECTRUM_GRAPH_HEIGHT - 1;
-
-    /* Invert Y axis (higher power = higher on screen = lower Y) */
-    uint16_t y = graph_bottom - (uint16_t)(normalized * (float)(SCREEN_SPECTRUM_GRAPH_HEIGHT - 1));
-    return y;
-}
-
-/* ========================================================================
- * Helper: Map frequency to pixel X coordinate
- * ======================================================================== */
-
-static uint16_t freq_to_x(uint32_t freq_hz, uint32_t freq_start_hz, uint32_t freq_step_hz, uint32_t num_bins)
-{
-    if (num_bins == 0 || freq_step_hz == 0) {
-        return 0;
-    }
-
-    uint32_t freq_end_hz = freq_start_hz + (freq_step_hz * num_bins);
-    if (freq_hz < freq_start_hz) {
-        return 0;
-    }
-    if (freq_hz > freq_end_hz) {
-        return HAL_DISPLAY_WIDTH - 1;
-    }
-
-    float fraction = (float)(freq_hz - freq_start_hz) / (float)(freq_end_hz - freq_start_hz);
-    return (uint16_t)(fraction * (float)(HAL_DISPLAY_WIDTH - 1));
-}
-
-/* ========================================================================
- * Helper: Get color for signal power (heatmap palette)
- * ======================================================================== */
-
-static uint16_t power_to_color(float power_dbm)
-{
-    float range = (float)(SCREEN_SPECTRUM_POWER_MAX_DBM - SCREEN_SPECTRUM_POWER_MIN_DBM);
-    float normalized = (power_dbm - (float)SCREEN_SPECTRUM_POWER_MIN_DBM) / range;
-
-    if (normalized < 0.0f) normalized = 0.0f;
-    if (normalized > 1.0f) normalized = 1.0f;
-
-    /* Blue → Cyan → Green → Yellow → Red gradient */
-    if (normalized < 0.25f) {
-        /* Blue to Cyan */
-        uint8_t g = (uint8_t)(normalized * 4.0f * 63.0f);
-        return HAL_COLOR_BLUE | ((uint16_t)g << 5);
-    } else if (normalized < 0.5f) {
-        /* Cyan to Green */
-        float t = (normalized - 0.25f) * 4.0f;
-        uint8_t b = (uint8_t)((1.0f - t) * 31.0f);
-        return HAL_COLOR_GREEN | b;
-    } else if (normalized < 0.75f) {
-        /* Green to Yellow */
-        float t = (normalized - 0.5f) * 4.0f;
-        uint8_t r = (uint8_t)(t * 31.0f);
-        return HAL_COLOR_GREEN | ((uint16_t)r << 11);
-    } else {
-        /* Yellow to Red */
-        float t = (normalized - 0.75f) * 4.0f;
-        uint8_t g = (uint8_t)((1.0f - t) * 63.0f);
-        return HAL_COLOR_RED | ((uint16_t)g << 5);
-    }
-}
-
-/* ========================================================================
- * Helper: Render frequency markers
- * ======================================================================== */
-
-static void render_markers(uint32_t freq_start_hz, uint32_t freq_step_hz, uint32_t num_bins)
-{
-    frequency_marker_t markers[SPECTRUM_MAX_MARKERS];
-    uint8_t marker_count = 0;
-
-    esp_err_t err = spectrum_analyzer_get_markers(markers, SPECTRUM_MAX_MARKERS, &marker_count);
-    if (err != ESP_OK || marker_count == 0) {
-        return;
-    }
-
-    uint16_t graph_top = SCREEN_SPECTRUM_CONTENT_Y + 2;
-
-    for (uint8_t i = 0; i < marker_count; i++) {
-        uint16_t x_start = freq_to_x(markers[i].freq_start_hz, freq_start_hz, freq_step_hz, num_bins);
-        uint16_t x_end = freq_to_x(markers[i].freq_end_hz, freq_start_hz, freq_step_hz, num_bins);
-
-        /* Draw dashed vertical lines at band boundaries */
-        for (uint16_t y = graph_top; y < graph_top + SCREEN_SPECTRUM_GRAPH_HEIGHT; y += 4) {
-            hal_display_draw_pixel(x_start, y, HAL_COLOR_CYAN);
-            if (x_end != x_start) {
-                hal_display_draw_pixel(x_end, y, HAL_COLOR_CYAN);
-            }
-        }
-
-        /* Draw label at the top of the band */
-        if (markers[i].label != NULL) {
-            uint16_t label_x = (x_start + x_end) / 2;
-            /* Shift label left so it doesn't overflow right edge */
-            if (label_x > HAL_DISPLAY_WIDTH - 30) {
-                label_x = HAL_DISPLAY_WIDTH - 30;
-            }
-            hal_display_draw_text(label_x, graph_top, markers[i].label,
-                                  HAL_COLOR_CYAN, HAL_COLOR_BLACK);
-        }
-    }
-}
-
-/* ========================================================================
  * Public API
  * ======================================================================== */
 
@@ -153,7 +31,6 @@ esp_err_t screen_spectrum_init(void)
 {
     memset(&s_state, 0, sizeof(s_state));
     s_state.initialized = true;
-    s_state.waterfall_row_idx = 0;
     return ESP_OK;
 }
 
@@ -169,147 +46,80 @@ esp_err_t screen_spectrum_render(void)
                           HAL_DISPLAY_HEIGHT - SCREEN_SPECTRUM_CONTENT_Y,
                           HAL_COLOR_BLACK, true);
 
-    /* Get spectrum data from spectrum_analyzer service */
-    spectrum_state_t spec_state;
-    esp_err_t err = spectrum_analyzer_get_state(&spec_state);
+    /* Title bar */
+    hal_display_draw_text(4, SCREEN_SPECTRUM_CONTENT_Y + 2, "MONITOR DE CANAIS RF",
+                          HAL_COLOR_CYAN, HAL_COLOR_BLACK);
 
-    if (err != ESP_OK || !spec_state.running) {
-        /* SDR not available or not running — show error message */
-        hal_display_draw_text(20, SCREEN_SPECTRUM_CONTENT_Y + 40,
-                              "SDR nao disponivel",
-                              HAL_COLOR_RED, HAL_COLOR_BLACK);
-        hal_display_draw_text(20, SCREEN_SPECTRUM_CONTENT_Y + 56,
-                              "Conecte RTL-SDR",
-                              HAL_COLOR_WHITE, HAL_COLOR_BLACK);
-        return ESP_OK;
+    /* Row 1: WiFi 2.4GHz Sniffer Status */
+    uint16_t y = SCREEN_SPECTRUM_CONTENT_Y + 16;
+    hal_display_draw_text(6, y, "WiFi 2.4G:", HAL_COLOR_YELLOW, HAL_COLOR_BLACK);
+    bool wifi_ok = (hal_wifi_scanner_get_status() == HAL_STATUS_ACTIVE);
+    if (wifi_ok) {
+        hal_display_draw_text(76, y, "CH [1] [6] [11] ATIVO", HAL_COLOR_GREEN, HAL_COLOR_BLACK);
+    } else {
+        hal_display_draw_text(76, y, "STANDBY", 0x7BEF, HAL_COLOR_BLACK);
     }
 
-    sdr_spectrum_t *spectrum = &spec_state.spectrum;
-
-    /* Draw power vs frequency graph */
-    if (spectrum->num_bins > 0 && spectrum->power_db != NULL) {
-        uint16_t graph_top = SCREEN_SPECTRUM_CONTENT_Y + 2;
-        uint16_t graph_bottom = graph_top + SCREEN_SPECTRUM_GRAPH_HEIGHT - 1;
-        uint16_t prev_x = 0;
-        uint16_t prev_y = graph_bottom;
-
-        /* Scale bins to screen width */
-        float bins_per_pixel = (float)spectrum->num_bins / (float)HAL_DISPLAY_WIDTH;
-
-        for (uint16_t px = 0; px < HAL_DISPLAY_WIDTH; px++) {
-            /* Determine which bin this pixel corresponds to */
-            uint32_t bin_idx = (uint32_t)((float)px * bins_per_pixel);
-            if (bin_idx >= spectrum->num_bins) {
-                bin_idx = spectrum->num_bins - 1;
-            }
-
-            float power = spectrum->power_db[bin_idx];
-            uint16_t y = power_to_y(power);
-
-            /* Draw line from previous point to current */
-            if (px > 0) {
-                /* Simple vertical line connection for adjacent pixels */
-                uint16_t y_min = (y < prev_y) ? y : prev_y;
-                uint16_t y_max = (y > prev_y) ? y : prev_y;
-                for (uint16_t dy = y_min; dy <= y_max; dy++) {
-                    hal_display_draw_pixel(px, dy, HAL_COLOR_GREEN);
-                }
-            } else {
-                hal_display_draw_pixel(px, y, HAL_COLOR_GREEN);
-            }
-
-            prev_x = px;
-            prev_y = y;
-        }
-
-        /* Draw reference lines */
-        /* -60 dBm threshold line (dashed) */
-        uint16_t threshold_y = power_to_y((float)spec_state.config.detection_threshold_dbm);
-        for (uint16_t px = 0; px < HAL_DISPLAY_WIDTH; px += 6) {
-            hal_display_draw_pixel(px, threshold_y, HAL_COLOR_YELLOW);
-            if (px + 1 < HAL_DISPLAY_WIDTH) {
-                hal_display_draw_pixel(px + 1, threshold_y, HAL_COLOR_YELLOW);
-            }
-        }
-
-        /* Draw frequency markers for known protocols */
-        render_markers(spectrum->freq_start_hz, spectrum->freq_step_hz, spectrum->num_bins);
-
-        /* Draw detected peak indicators */
-        for (uint8_t i = 0; i < spec_state.peak_count; i++) {
-            uint16_t peak_x = freq_to_x(spec_state.peaks[i].frequency_hz,
-                                         spectrum->freq_start_hz,
-                                         spectrum->freq_step_hz,
-                                         spectrum->num_bins);
-            uint16_t peak_y = power_to_y(spec_state.peaks[i].power_dbm);
-
-            /* Draw small triangle marker above peak */
-            hal_display_draw_pixel(peak_x, peak_y - 2, HAL_COLOR_RED);
-            hal_display_draw_pixel(peak_x - 1, peak_y - 1, HAL_COLOR_RED);
-            hal_display_draw_pixel(peak_x + 1, peak_y - 1, HAL_COLOR_RED);
-        }
+    /* Signal activity bar for WiFi */
+    hal_display_draw_rect(6, y + 11, 228, 4, 0x18E3, true);
+    if (wifi_ok) {
+        hal_display_draw_rect(6, y + 11, 160, 4, HAL_COLOR_GREEN, true);
     }
 
-    /* Draw info bar at bottom */
-    uint16_t info_y = HAL_DISPLAY_HEIGHT - SCREEN_SPECTRUM_INFO_HEIGHT;
-    hal_display_draw_rect(0, info_y, HAL_DISPLAY_WIDTH, SCREEN_SPECTRUM_INFO_HEIGHT,
-                          HAL_COLOR_BLACK, true);
+    /* Row 2: BLE Scanner Status */
+    y += 19;
+    hal_display_draw_text(6, y, "BLE Adv :", HAL_COLOR_YELLOW, HAL_COLOR_BLACK);
+    bool ble_ok = (hal_ble_scanner_get_status() == HAL_STATUS_ACTIVE);
+    if (ble_ok) {
+        hal_display_draw_text(76, y, "Legacy ADV ATIVO (2.4G)", HAL_COLOR_GREEN, HAL_COLOR_BLACK);
+    } else {
+        hal_display_draw_text(76, y, "INATIVO", 0x7BEF, HAL_COLOR_BLACK);
+    }
+    hal_display_draw_rect(6, y + 11, 228, 4, 0x18E3, true);
+    if (ble_ok) {
+        hal_display_draw_rect(6, y + 11, 180, 4, HAL_COLOR_CYAN, true);
+    }
 
-    char info_buf[48];
-    snprintf(info_buf, sizeof(info_buf), "F:%luMHz BW:%lukHz G:%.1fdB",
-             (unsigned long)spec_state.config.center_freq_mhz,
-             (unsigned long)spec_state.config.bandwidth_khz,
-             (double)spec_state.config.gain_db);
-    hal_display_draw_text(2, info_y + 4, info_buf, HAL_COLOR_WHITE, HAL_COLOR_BLACK);
+    /* Row 3: LoRa SX1262 915MHz Status */
+    y += 19;
+    hal_display_draw_text(6, y, "LoRa RF :", HAL_COLOR_YELLOW, HAL_COLOR_BLACK);
+    bool lora_ok = (hal_lora_get_status() == HAL_STATUS_ACTIVE);
+    if (lora_ok) {
+        hal_display_draw_text(76, y, "915 MHz (SF7/BW125/CR45)", HAL_COLOR_GREEN, HAL_COLOR_BLACK);
+    } else {
+        hal_display_draw_text(76, y, "MODULO AUSENTE", HAL_COLOR_RED, HAL_COLOR_BLACK);
+    }
+    hal_display_draw_rect(6, y + 11, 228, 4, 0x18E3, true);
+    if (lora_ok) {
+        hal_display_draw_rect(6, y + 11, 220, 4, HAL_COLOR_MAGENTA, true);
+    }
 
-    /* Peak count */
-    char peak_buf[16];
-    snprintf(peak_buf, sizeof(peak_buf), "Pk:%u", spec_state.peak_count);
-    hal_display_draw_text(200, info_y + 4, peak_buf, HAL_COLOR_YELLOW, HAL_COLOR_BLACK);
+    /* Row 4: GPS Position & Fix */
+    y += 19;
+    hal_display_draw_text(6, y, "GPS POS :", HAL_COLOR_YELLOW, HAL_COLOR_BLACK);
+    gps_position_t gps_pos;
+    if (hal_gps_get_position(&gps_pos) == ESP_OK && gps_pos.fix_valid) {
+        char gps_buf[36];
+        snprintf(gps_buf, sizeof(gps_buf), "FIX OK: SATS=%u", (unsigned)gps_pos.satellites_used);
+        hal_display_draw_text(76, y, gps_buf, HAL_COLOR_GREEN, HAL_COLOR_BLACK);
+    } else {
+        hal_display_draw_text(76, y, "AGUARDANDO FIX (9600)", HAL_COLOR_YELLOW, HAL_COLOR_BLACK);
+    }
+
+    /* Footer: Return instructions */
+    uint16_t footer_y = HAL_DISPLAY_HEIGHT - 12;
+    hal_display_draw_rect(0, footer_y - 2, HAL_DISPLAY_WIDTH, 14, 0x18C3, true);
+    hal_display_draw_text(18, footer_y, "[ENTER / ESC / 1-7] Voltar ao Menu",
+                          HAL_COLOR_WHITE, 0x18C3);
 
     return ESP_OK;
 }
 
 esp_err_t screen_spectrum_handle_key(uint8_t key)
 {
-    if (!s_state.initialized) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    /* Spectrum screen uses UP/DOWN for gain adjustments */
-    spectrum_config_t config;
-    esp_err_t err = spectrum_analyzer_get_config(&config);
-    if (err != ESP_OK) {
-        return ESP_OK; /* No spectrum available, ignore keys */
-    }
-
-    switch ((ui_key_t)key) {
-        case UI_KEY_UP:
-            /* Increase gain by 1 dB */
-            if (config.gain_db < SPECTRUM_GAIN_MAX_DB) {
-                config.gain_db += 1.0f;
-                if (config.gain_db > SPECTRUM_GAIN_MAX_DB) {
-                    config.gain_db = SPECTRUM_GAIN_MAX_DB;
-                }
-                spectrum_analyzer_set_config(&config);
-            }
-            break;
-
-        case UI_KEY_DOWN:
-            /* Decrease gain by 1 dB */
-            if (config.gain_db > SPECTRUM_GAIN_MIN_DB) {
-                config.gain_db -= 1.0f;
-                if (config.gain_db < SPECTRUM_GAIN_MIN_DB) {
-                    config.gain_db = SPECTRUM_GAIN_MIN_DB;
-                }
-                spectrum_analyzer_set_config(&config);
-            }
-            break;
-
-        default:
-            break;
-    }
-
+    (void)key;
+    /* Any key press on RF monitor returns to Main Menu */
+    ui_manager_navigate_to(UI_SCREEN_MAIN_MENU);
     return ESP_OK;
 }
 

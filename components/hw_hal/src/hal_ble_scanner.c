@@ -217,6 +217,8 @@ static void ble_on_sync(void)
  * Public API Implementation
  * --------------------------------------------------------------------------- */
 
+#include "esp_bt.h"
+
 esp_err_t hal_ble_scanner_init(void)
 {
     if (s_state.initialized) {
@@ -226,6 +228,9 @@ esp_err_t hal_ble_scanner_init(void)
 
     ESP_LOGI(TAG, "Initializing BLE scanner");
     s_state.module_state.status = HAL_STATUS_INITIALIZING;
+
+    /* Release classic BT memory to free RAM */
+    esp_bt_mem_release(ESP_BT_MODE_CLASSIC_BT);
 
     /* Initialize NimBLE port */
     esp_err_t err = nimble_port_init();

@@ -1,0 +1,4 @@
+# UBSan suppressions for known issues in third-party libraries.
+# Theft v0.4.5 has a shift-by-64 bug in theft_random.c:79 that triggers
+# UBSan's shift-exponent check. This is a library bug, not application code.
+shift-exponent:theft_random.c

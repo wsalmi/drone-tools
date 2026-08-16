@@ -1,0 +1,39 @@
+# INVALID fixture: Critical severity with ACCEPTED_RISK status
+# Expected: validator FAILS — Critical cannot be accepted risk
+# Validates: Property 2, Requirement 2.6
+
+schema_version: 1
+findings:
+  - id: CQR-REMOTEID-002
+    title: "Buffer overflow in parser"
+    category: memory
+    severity: Critical
+    severity_rationale:
+      impact: "remote code execution possible"
+      probability: "attacker-controlled input"
+    status: ACCEPTED_RISK
+    owner: "services/remoteid"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/services/src/remoteid_decoder.c:50", excerpt_hash: "ccc333"}
+      reproduction: ["Send oversized packet"]
+      observed_result: "crash"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/services/src/remoteid_decoder.c:50"}
+    root_cause: "No size check before memcpy"
+    remediation:
+      strategy: null
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: null
+      remediated_result: null
+    requirements: ["5.1", "5.2"]
+    verification:
+      gates: {}
+      artifact_refs: []
+    accepted_risk:
+      owner: "security team"
+      justification: "Will fix in next sprint"
+      review_date: "2027-03-01"

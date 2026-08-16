@@ -37,10 +37,10 @@ extern "C" {
 #define SCREEN_MENU_CONTENT_Y           14
 
 /** @brief Number of menu items */
-#define SCREEN_MENU_ITEM_COUNT          6
+#define SCREEN_MENU_ITEM_COUNT          7
 
 /** @brief Line height for menu items in pixels */
-#define SCREEN_MENU_LINE_HEIGHT         18
+#define SCREEN_MENU_LINE_HEIGHT         14
 
 /** @brief Left margin for menu text */
 #define SCREEN_MENU_TEXT_X              20

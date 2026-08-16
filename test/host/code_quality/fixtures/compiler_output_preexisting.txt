@@ -1,0 +1,2 @@
+main/data_pipeline.c:15:3: warning: ISO C99 requires at least one argument for the "..." in a variadic macro [-Wpedantic]
+main/data_pipeline.c:28:10: warning: unused variable 'pipeline_stage' [-Wunused-variable]

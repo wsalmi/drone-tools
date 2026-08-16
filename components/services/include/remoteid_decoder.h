@@ -30,6 +30,39 @@ extern "C" {
 #endif
 
 /* ========================================================================
+ * Rejection Reasons (safe bounds validation)
+ * ======================================================================== */
+
+/**
+ * @brief Reasons why a RemoteID frame was rejected during validation.
+ *
+ * Used by remoteid_validate_frame_safe() and internally by decode functions
+ * to provide observable rejection causes without over-reading the buffer.
+ *
+ * Validates: Requirements 5.1, 5.2, 5.7, 5.8, 5.9, 12.1, 12.6
+ */
+typedef enum {
+    RID_REJECT_NONE = 0,         /**< No rejection — frame is valid */
+    RID_REJECT_NULL,             /**< NULL pointer passed for frame or output */
+    RID_REJECT_TRUNCATED,        /**< Buffer too short for minimum frame structure */
+    RID_REJECT_DECLARED_LENGTH,  /**< Declared length inconsistent with buffer */
+    RID_REJECT_BOUNDS,           /**< Field offset+size exceeds available bytes */
+    RID_REJECT_OVERFLOW,         /**< Arithmetic overflow in offset/size computation */
+    RID_REJECT_FORMAT,           /**< Invalid OUI, UUID, AD type, or message type */
+    RID_REJECT_CRC              /**< CRC-8 mismatch — integrity check failed */
+} remoteid_reject_reason_t;
+
+/**
+ * @brief Result of frame validation with specific rejection reason.
+ */
+typedef struct {
+    bool valid;                          /**< True if frame passed all checks */
+    remoteid_reject_reason_t reason;     /**< Rejection reason (RID_REJECT_NONE if valid) */
+    uint16_t available_payload;          /**< Bytes available after header for messages */
+    uint8_t message_count;               /**< Number of complete messages in payload */
+} remoteid_validation_result_t;
+
+/* ========================================================================
  * Constants
  * ======================================================================== */
 
@@ -79,6 +112,12 @@ extern "C" {
 #define REMOTEID_LAT_INVALID            0
 #define REMOTEID_LON_INVALID            0
 
+/* Raw coordinate bounds (±90° and ±180° scaled by 1e7) */
+#define REMOTEID_LAT_RAW_MIN            (-900000000)
+#define REMOTEID_LAT_RAW_MAX            900000000
+#define REMOTEID_LON_RAW_MIN            (-1800000000)
+#define REMOTEID_LON_RAW_MAX            1800000000
+
 /* Altitude offset (ASTM F3411: altitude = raw * 0.5 - 1000) */
 #define REMOTEID_ALT_OFFSET             (-1000.0f)
 #define REMOTEID_ALT_SCALE              0.5f
@@ -87,6 +126,10 @@ extern "C" {
 /* Speed scale (ASTM F3411: speed in 0.25 m/s increments) */
 #define REMOTEID_SPEED_SCALE            0.25f
 #define REMOTEID_SPEED_MULTIPLIER_FLAG  0x01
+
+/* CRC-8 protected region: first 24 bytes of each 25-byte message */
+#define REMOTEID_CRC_PROTECTED_LEN      24
+#define REMOTEID_CRC_OFFSET             24  /**< CRC byte position within 25-byte message */
 
 /* Direction scale (ASTM F3411: direction in degrees, 0-360) */
 #define REMOTEID_DIRECTION_SCALE        1.0f
@@ -121,6 +164,22 @@ typedef struct {
     bool has_operator_location;             /**< True if operator location is present */
     bool has_speed;                         /**< True if speed data is valid */
 } remoteid_data_t;
+
+/* ========================================================================
+ * Metrics
+ * ======================================================================== */
+
+/**
+ * @brief RemoteID decoder metrics for observability.
+ *
+ * Tracks accepted/rejected frames and integrity errors (CRC mismatches).
+ * Validates: Requirements 5.4, 5.9, 12.1
+ */
+typedef struct {
+    uint64_t accepted;                              /**< Frames successfully decoded */
+    uint64_t rejected[RID_REJECT_CRC + 1];          /**< Rejected frames by reason */
+    uint64_t integrity_errors;                      /**< CRC mismatches (subset of rejected[RID_REJECT_CRC]) */
+} remoteid_metrics_t;
 
 /* ========================================================================
  * API Functions
@@ -222,6 +281,23 @@ esp_err_t remoteid_decode(const uint8_t *raw_payload, uint16_t payload_len,
 uint8_t remoteid_crc8(const uint8_t *data, uint16_t len);
 
 /**
+ * @brief Get a snapshot of RemoteID decoder metrics.
+ *
+ * Returns the current accepted/rejected/integrity_errors counters.
+ *
+ * @param[out] out  Pointer to metrics output struct.
+ * @return ESP_OK on success, ESP_ERR_INVALID_ARG if out is NULL.
+ */
+esp_err_t remoteid_metrics_snapshot(remoteid_metrics_t *out);
+
+/**
+ * @brief Reset all RemoteID decoder metrics to zero.
+ *
+ * Used for test isolation and deterministic metric assertions.
+ */
+void remoteid_metrics_reset(void);
+
+/**
  * @brief Validate a RemoteID frame structure without fully decoding.
  *
  * Performs structural validation including size checks, OUI/UUID verification,
@@ -234,6 +310,29 @@ uint8_t remoteid_crc8(const uint8_t *data, uint16_t len);
  * @return ESP_OK if frame passes validation, error code otherwise.
  */
 esp_err_t remoteid_validate_frame(const uint8_t *frame, uint16_t len, bool is_ble);
+
+/**
+ * @brief Validate a RemoteID frame with detailed rejection reason (safe bounds).
+ *
+ * Validates pointers, minimum size, declared length, offsets, and sums
+ * before allowing any field access. Every sum uses the safe form:
+ *   required <= length - offset (after offset <= length)
+ *
+ * This is the preferred validation entry point for new code. It fills
+ * a result struct with the specific rejection reason and validated
+ * payload metrics, enabling callers to observe WHY a frame was rejected.
+ *
+ * Validates: Requirements 5.1, 5.2, 5.7, 5.8, 5.9, 12.1, 12.6
+ *
+ * @param[in]  frame   Raw frame data.
+ * @param[in]  len     Length of frame data in bytes.
+ * @param[in]  is_ble  true if BLE source, false if WiFi source.
+ * @param[out] result  Validation result with rejection reason (must not be NULL).
+ * @return ESP_OK if frame is valid, ESP_ERR_INVALID_ARG/SIZE/etc on rejection.
+ */
+esp_err_t remoteid_validate_frame_safe(const uint8_t *frame, uint16_t len,
+                                       bool is_ble,
+                                       remoteid_validation_result_t *result);
 
 /**
  * @brief Encode RemoteID data back into ASTM F3411 message bytes (for testing).

@@ -34,9 +34,11 @@
 
 #define GPS_TAG                 "hal_gps"
 #define GPS_UART_NUM            UART_NUM_1
+#define GPS_PIN_TX              13      /* ESP32 TX -> ATGM336H RX (G13) */
+#define GPS_PIN_RX              15      /* ESP32 RX <- ATGM336H TX (G15) */
 #define GPS_UART_BUF_SIZE       1024
 #define GPS_NMEA_MAX_LEN        128
-#define GPS_READER_TASK_STACK   4096
+#define GPS_READER_TASK_STACK   3072
 #define GPS_READER_TASK_PRIO    3
 #define GPS_NO_FIX_TIMEOUT_MS   60000   /* 60 seconds */
 #define GPS_UPDATE_INTERVAL_MS  1000    /* 1 second */
@@ -474,6 +476,14 @@ esp_err_t hal_gps_init(uint32_t baud_rate)
         return err;
     }
 
+    err = uart_set_pin(GPS_UART_NUM, GPS_PIN_TX, GPS_PIN_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (err != ESP_OK) {
+        ESP_LOGE(GPS_TAG, "Failed to set UART pins (TX=%d, RX=%d): %d", GPS_PIN_TX, GPS_PIN_RX, err);
+        uart_driver_delete(GPS_UART_NUM);
+        gps_ctx.module_state.status = HAL_STATUS_ERROR;
+        return err;
+    }
+
     /* Create data mutex */
     gps_ctx.data_mutex = xSemaphoreCreateMutex();
     if (gps_ctx.data_mutex == NULL) {
@@ -488,7 +498,7 @@ esp_err_t hal_gps_init(uint32_t baud_rate)
     /* Start reader task on Core 1 (APP_CPU) per design */
     BaseType_t ret = xTaskCreatePinnedToCore(
         gps_reader_task,
-        "gps_reader",
+        "hal_gps_rx",
         GPS_READER_TASK_STACK,
         NULL,
         GPS_READER_TASK_PRIO,

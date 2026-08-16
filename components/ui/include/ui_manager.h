@@ -71,13 +71,15 @@ extern "C" {
  * @brief Available UI screens.
  */
 typedef enum {
-    UI_SCREEN_SCANNER = 0,      /**< Scanner: paginated aircraft list */
-    UI_SCREEN_MAP,              /**< Map: 2D positional view */
+    UI_SCREEN_SCANNER = 0,      /**< 1: Scanner: paginated aircraft list */
+    UI_SCREEN_MAP,              /**< 2: Map: 2D positional view */
+    UI_SCREEN_HUD,              /**< 3: HUD Dashboard (Dynamic live tactical view) */
+    UI_SCREEN_SPECTRUM,         /**< 4: Spectrum analyzer waterfall */
+    UI_SCREEN_MODES,            /**< 5: Modes / Sensors (Quick Toggles) */
+    UI_SCREEN_SETTINGS,         /**< 6: Configuration settings */
+    UI_SCREEN_LOG,              /**< 7: Log viewer / export & SD status */
+    UI_SCREEN_MAIN_MENU,        /**< Main menu navigation */
     UI_SCREEN_AIRCRAFT_LIST,    /**< Aircraft list (detailed) */
-    UI_SCREEN_SPECTRUM,         /**< Spectrum analyzer waterfall */
-    UI_SCREEN_SETTINGS,         /**< Configuration settings */
-    UI_SCREEN_LOG,              /**< Log viewer / export */
-    UI_SCREEN_MAIN_MENU,       /**< Main menu navigation */
     UI_SCREEN_COUNT             /**< Total number of screens */
 } ui_screen_t;
 
@@ -96,7 +98,16 @@ typedef enum {
     UI_KEY_RIGHT,
     UI_KEY_ENTER,
     UI_KEY_BACK,
-    UI_KEY_MENU
+    UI_KEY_MENU,
+    UI_KEY_TAB,
+    UI_KEY_SPACE,
+    UI_KEY_1,
+    UI_KEY_2,
+    UI_KEY_3,
+    UI_KEY_4,
+    UI_KEY_5,
+    UI_KEY_6,
+    UI_KEY_7
 } ui_key_t;
 
 /* ========================================================================

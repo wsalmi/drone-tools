@@ -1,0 +1,67 @@
+# INVALID fixture: Duplicate finding IDs
+# Expected: validator FAILS — IDs must be unique
+# Validates: Property 2, Requirement 2.1
+
+schema_version: 1
+findings:
+  - id: CQR-BUILD-001
+    title: "Host build path issue"
+    category: build
+    severity: High
+    severity_rationale:
+      impact: "build fails"
+      probability: "always"
+    status: OPEN
+    owner: "test/host"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "test/host/CMakeLists.txt:110", excerpt_hash: "abc123"}
+      reproduction: ["cmake -S test/host -B build/host"]
+      observed_result: "error"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "test/host/CMakeLists.txt:110"}
+    root_cause: null
+    remediation:
+      strategy: null
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: null
+      remediated_result: null
+    requirements: ["3.1"]
+    verification:
+      gates: {}
+      artifact_refs: []
+    accepted_risk: null
+
+  - id: CQR-BUILD-001  # DUPLICATE ID
+    title: "Another finding with same ID"
+    category: build
+    severity: Medium
+    severity_rationale:
+      impact: "confusion"
+      probability: "always"
+    status: OPEN
+    owner: "test/host"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "test/host/CMakeLists.txt:200", excerpt_hash: "xyz789"}
+      reproduction: ["some command"]
+      observed_result: "something"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "test/host/CMakeLists.txt:200"}
+    root_cause: null
+    remediation:
+      strategy: null
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: null
+      remediated_result: null
+    requirements: ["3.1"]
+    verification:
+      gates: {}
+      artifact_refs: []
+    accepted_risk: null

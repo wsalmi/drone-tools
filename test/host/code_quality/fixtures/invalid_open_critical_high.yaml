@@ -1,0 +1,67 @@
+# INVALID fixture (for acceptance): Open Critical and High findings present
+# Expected: acceptance validator returns NOT_ACCEPTED
+# Validates: Property 22, Requirements 12.8, 12.9
+
+schema_version: 1
+findings:
+  - id: CQR-REMOTEID-001
+    title: "Received CRC is not compared"
+    category: parsing
+    severity: High
+    severity_rationale:
+      impact: "acceptance of non-integrity telemetry"
+      probability: "untrusted external input"
+    status: OPEN
+    owner: "services/remoteid"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/services/src/remoteid_decoder.c:142", excerpt_hash: "bbb222"}
+      reproduction: ["Run host PBT with corrupted CRC"]
+      observed_result: "CRC not checked; corrupt packet accepted"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/services/src/remoteid_decoder.c:142"}
+    root_cause: null
+    remediation:
+      strategy: null
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: null
+      remediated_result: null
+    requirements: ["5.3", "5.4"]
+    verification:
+      gates: {}
+      artifact_refs: []
+    accepted_risk: null
+
+  - id: CQR-QUEUES-001
+    title: "Queue drops are not counted"
+    category: concurrency
+    severity: Critical
+    severity_rationale:
+      impact: "silent data loss"
+      probability: "queue full under normal traffic"
+    status: IN_REMEDIATION
+    owner: "main/data_pipeline"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "main/data_pipeline.c:88", excerpt_hash: "ddd444"}
+      reproduction: ["Saturate detection queue"]
+      observed_result: "no error logged, item silently lost"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "main/data_pipeline.c:88"}
+    root_cause: "xQueueSend return value ignored"
+    remediation:
+      strategy: "Wrap in submit function with metrics"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: null
+      remediated_result: null
+    requirements: ["6.1", "6.2"]
+    verification:
+      gates: {}
+      artifact_refs: []
+    accepted_risk: null

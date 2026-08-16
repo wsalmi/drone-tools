@@ -29,6 +29,10 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "nvs_flash.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include "driver/spi_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -43,6 +47,7 @@
 #include "hal_wifi_scanner.h"
 #include "hal_ble_scanner.h"
 #include "hal_buzzer.h"
+#include "hal_keyboard.h"
 #include "hw_manager.h"
 
 /* Domain headers */
@@ -59,9 +64,13 @@
 #include "data_logger.h"
 #include "spectrum_analyzer.h"
 #include "alert_engine.h"
+#include "simulation_service.h"
+#include "web_server_service.h"
 
-/* UI header */
+/* UI headers */
 #include "ui_manager.h"
+#include "screen_hud.h"
+#include "screen_modes.h"
 
 /* Main module headers */
 #include "task_manager.h"
@@ -202,12 +211,23 @@ static void init_phase_buses(void)
     ESP_LOGI(TAG, "=== Phase 1: Hardware Buses ===");
     init_show_header("-- Buses --");
 
-    /* SPI buses are initialized by HAL drivers when they register devices.
-     * UART is initialized by hal_gps_init.
-     * USB Host is initialized by hal_sdr_init.
-     * Log the phase for visibility. */
+    /* Initialize shared SPI3 bus (VSPI) for RF modules and SD card */
+    spi_bus_config_t spi3_cfg = {
+        .mosi_io_num = 14,
+        .miso_io_num = 39,
+        .sclk_io_num = 40,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 4096,
+    };
+    esp_err_t spi_err = spi_bus_initialize(SPI3_HOST, &spi3_cfg, SPI_DMA_CH_AUTO);
+    if (spi_err == ESP_OK || spi_err == ESP_ERR_INVALID_STATE) {
+        ESP_LOGI(TAG, "SPI3 (RF+SD): Shared bus initialized");
+    } else {
+        ESP_LOGW(TAG, "SPI3 bus initialize returned: %s", esp_err_to_name(spi_err));
+    }
+
     ESP_LOGI(TAG, "SPI2 (Display): configured by hal_display_init");
-    ESP_LOGI(TAG, "SPI3 (RF+SD): configured by hw_manager/hal_sd_init");
     ESP_LOGI(TAG, "UART1 (GPS): configured by hal_gps_init");
     ESP_LOGI(TAG, "USB OTG (SDR): configured by hal_sdr_init");
 
@@ -245,16 +265,6 @@ static void init_phase_hal(void)
         /* Cannot show status on display, continue with logging only */
     }
 
-    /* --- SD Card --- */
-    err = hal_sd_init();
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "SD Card: OK");
-        init_show_status("SD Card", "OK", false);
-    } else {
-        ESP_LOGW(TAG, "SD Card: ABSENT/FAIL (%s)", esp_err_to_name(err));
-        init_show_status("SD Card", "FAIL", true);
-    }
-
     /* --- GPS (UART1, 9600 baud) --- */
     err = hal_gps_init(GPS_BAUD_RATE);
     if (err == ESP_OK) {
@@ -265,7 +275,17 @@ static void init_phase_hal(void)
         init_show_status("GPS ATGM336H", "FAIL", true);
     }
 
-    /* --- RF Modules via Hardware Manager (LoRa/NRF24 hot-swap) --- */
+    /*
+     * --- RF Modules via Hardware Manager (LoRa/NRF24 hot-swap) ---
+     *
+     * Must run before hal_sd_init(): the SD card shares SPI3 with the RF
+     * modules and only adds its device to that bus — it never creates it.
+     * hw_manager_init() creates the SPI3 bus synchronously inside its
+     * initial probe (hal_lora_init()/hal_nrf24_init()) before returning, so
+     * by the time hal_sd_init() runs afterward the bus already exists.
+     * Calling hal_sd_init() first means SD always fails with ESP_ERR_NOT_FOUND
+     * even when the card is physically present.
+     */
     hw_manager_config_t hw_cfg;
     hw_manager_get_default_config(&hw_cfg);
     err = hw_manager_init(&hw_cfg);
@@ -283,6 +303,16 @@ static void init_phase_hal(void)
     } else {
         ESP_LOGW(TAG, "HW Manager init FAILED: %s", esp_err_to_name(err));
         init_show_status("RF (HW Mgr)", "FAIL", true);
+    }
+
+    /* --- SD Card (shares SPI3 bus created by HW Manager above) --- */
+    err = hal_sd_init();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "SD Card: OK");
+        init_show_status("SD Card", "OK", false);
+    } else {
+        ESP_LOGW(TAG, "SD Card: ABSENT/FAIL (%s)", esp_err_to_name(err));
+        init_show_status("SD Card", "FAIL", true);
     }
 
     /* --- RTL-SDR (USB Host OTG) --- */
@@ -329,6 +359,16 @@ static void init_phase_hal(void)
     } else {
         ESP_LOGW(TAG, "Buzzer init FAILED: %s", esp_err_to_name(err));
         init_show_status("Buzzer", "FAIL", true);
+    }
+
+    /* --- Cardputer Keyboard --- */
+    err = hal_keyboard_init();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Keyboard: OK");
+        init_show_status("Keyboard", "OK", false);
+    } else {
+        ESP_LOGW(TAG, "Keyboard init FAILED: %s", esp_err_to_name(err));
+        init_show_status("Keyboard", "FAIL", true);
     }
 }
 
@@ -523,6 +563,20 @@ static void init_phase_services(void)
         ESP_LOGW(TAG, "Alert Engine: %s", esp_err_to_name(err));
         init_show_status("Alert Engine", "FAIL", true);
     }
+
+    /* Simulation Service */
+    err = simulation_service_init();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "[BOOT] Simulation Engine: OK");
+        init_show_status("Simulation", "OK", false);
+    }
+
+    /* Web Server Service */
+    err = web_server_service_init();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "[BOOT] Web Server / AP: OK");
+        init_show_status("Web / AP", "OK", false);
+    }
 }
 
 /**
@@ -530,12 +584,17 @@ static void init_phase_services(void)
  */
 static void init_phase_ui(void)
 {
-    ESP_LOGI(TAG, "=== Phase 6: UI ===");
+    ESP_LOGI(TAG, "=== Phase 6: UI Subsystems ===");
     init_show_header("-- UI --");
+
+    /* Initialize Screen subsystems */
+    screen_hud_init();
+    screen_modes_init();
 
     esp_err_t err = ui_manager_init();
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "UI Manager: OK");
+        ESP_LOGI(TAG, "[BOOT] UI Manager & Screens initialized successfully (Free Heap: %u bytes)",
+                 (unsigned)esp_get_free_heap_size());
         init_show_status("UI Manager", "OK", false);
 
         /* Set initial module status based on current HAL state */
@@ -550,7 +609,7 @@ static void init_phase_ui(void)
         ui_manager_update_sd_status(hal_sd_is_mounted());
         ui_manager_update_aircraft_count(0);
     } else {
-        ESP_LOGE(TAG, "UI Manager FAILED: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "[BOOT] UI Manager FAILED: %s", esp_err_to_name(err));
         init_show_status("UI Manager", "FAIL", true);
     }
 }
@@ -562,16 +621,17 @@ static void init_phase_tasks(void)
 {
     esp_err_t err;
 
-    ESP_LOGI(TAG, "=== Phase 7: Tasks ===");
+    ESP_LOGI(TAG, "=== Phase 7: FreeRTOS Tasks & Pipeline ===");
     init_show_header("-- Tasks --");
 
     /* Data Pipeline (inter-task queues, events, shared state) */
     err = data_pipeline_init();
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Data Pipeline: OK");
+        ESP_LOGI(TAG, "[BOOT] Data Pipeline: OK (Queue size=%d, Free Heap=%u bytes)",
+                 PIPELINE_LOGGER_QUEUE_SIZE, (unsigned)esp_get_free_heap_size());
         init_show_status("Pipeline", "OK", false);
     } else {
-        ESP_LOGE(TAG, "Data Pipeline FAILED: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "[BOOT] Data Pipeline FAILED: %s", esp_err_to_name(err));
         init_show_status("Pipeline", "FAIL", true);
         return;  /* Cannot proceed without pipeline */
     }
@@ -579,28 +639,31 @@ static void init_phase_tasks(void)
     /* Task Manager initialization */
     err = task_manager_init();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Task Manager init FAILED: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "[BOOT] Task Manager init FAILED: %s", esp_err_to_name(err));
         init_show_status("Task Mgr", "FAIL", true);
         return;
     }
 
     /* Start Detection Service (creates Core 0 detection tasks) */
+    ESP_LOGI(TAG, "[BOOT] Launching Core 0 Detection Tasks (WiFi/BLE, RF Monitor, SDR)...");
     err = detection_service_start();
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Detection tasks started (Core 0)");
+        ESP_LOGI(TAG, "[BOOT] Detection tasks started successfully on Core 0");
         init_show_status("Detect Tasks", "OK", false);
     } else {
-        ESP_LOGW(TAG, "Detection start: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "[BOOT] Detection start warning: %s", esp_err_to_name(err));
         init_show_status("Detect Tasks", "FAIL", true);
     }
 
     /* Start Core 1 tasks via Task Manager */
+    ESP_LOGI(TAG, "[BOOT] Launching Core 1 Tasks (UI Render, Decoder, GPS, Logger)...");
     err = task_manager_start();
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "Core 1 tasks started (UI, Decoder, GPS, Logger)");
+        ESP_LOGI(TAG, "[BOOT] Core 1 tasks started successfully (Free Heap: %u bytes)",
+                 (unsigned)esp_get_free_heap_size());
         init_show_status("App Tasks", "OK", false);
     } else {
-        ESP_LOGE(TAG, "Task Manager start FAILED: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "[BOOT] Task Manager start FAILED: %s", esp_err_to_name(err));
         init_show_status("App Tasks", "FAIL", true);
     }
 }
@@ -611,10 +674,25 @@ static void init_phase_tasks(void)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "================================================");
-    ESP_LOGI(TAG, " Drone Telemetry Monitor v1.0");
-    ESP_LOGI(TAG, " Platform: M5 Stack Cardputer ADV (ESP32-S3)");
-    ESP_LOGI(TAG, "================================================");
+    /* Initialize NVS Flash (required for WiFi, Bluetooth NimBLE, and PHY calibrations) */
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_err = nvs_flash_init();
+    }
+    if (nvs_err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS Flash init failed: %s", esp_err_to_name(nvs_err));
+    }
+
+    /* Initialize TCP/IP stack and system event loop (required for WiFi and BLE) */
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    ESP_LOGI(TAG, "==================================================");
+    ESP_LOGI(TAG, "  DRONE TELEMETRY MONITOR — BOOT SEQUENCE");
+    ESP_LOGI(TAG, "  Platform: M5Stack Cardputer ADV (ESP32-S3)");
+    ESP_LOGI(TAG, "  Initial Free Heap: %u bytes", (unsigned)esp_get_free_heap_size());
+    ESP_LOGI(TAG, "==================================================");
 
     uint32_t start_time_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
@@ -630,30 +708,38 @@ void app_main(void)
     /* Calculate total initialization time */
     uint32_t elapsed_ms = (uint32_t)(esp_timer_get_time() / 1000ULL) - start_time_ms;
 
-    ESP_LOGI(TAG, "================================================");
-    ESP_LOGI(TAG, " Initialization complete in %lu ms", (unsigned long)elapsed_ms);
-    ESP_LOGI(TAG, " Active modules: LoRa=%d NRF24=%d SDR=%d GPS=%d SD=%d",
+    ESP_LOGI(TAG, "==================================================");
+    ESP_LOGI(TAG, "  BOOT COMPLETE in %lu ms", (unsigned long)elapsed_ms);
+    ESP_LOGI(TAG, "  Free Heap: %u bytes (Min Ever: %u bytes)",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)esp_get_minimum_free_heap_size());
+    ESP_LOGI(TAG, "  Active modules: LoRa=%d NRF24=%d SDR=%d GPS=%d SD=%d",
              hal_lora_get_status() == HAL_STATUS_ACTIVE,
              hal_nrf24_get_status() == HAL_STATUS_ACTIVE,
              hal_sdr_get_status() == HAL_STATUS_ACTIVE,
              hal_gps_get_status() == HAL_STATUS_ACTIVE,
              hal_sd_is_mounted());
-    ESP_LOGI(TAG, " Signatures loaded: %u", signatures_get_count());
-    ESP_LOGI(TAG, " Aircraft registry: %d/%d slots",
+    ESP_LOGI(TAG, "  Signatures loaded: %u", signatures_get_count());
+    ESP_LOGI(TAG, "  Aircraft registry: %d/%d slots",
              registry_get_active_count(&g_registry), MAX_AIRCRAFT);
-    ESP_LOGI(TAG, "================================================");
+    ESP_LOGI(TAG, "==================================================");
 
     /* Show completion on display */
     char complete_msg[40];
     snprintf(complete_msg, sizeof(complete_msg), "Ready! (%lums)", (unsigned long)elapsed_ms);
     init_show_status(complete_msg, "", false);
 
-    /* Brief display of init complete before UI takes over */
+    ESP_LOGI(TAG, "[BOOT] Waiting 1000ms before switching to UI Main Menu...");
     vTaskDelay(pdMS_TO_TICKS(1000));
+
+    /* Clear boot text and switch to main menu */
+    ESP_LOGI(TAG, "[BOOT] Clearing boot text and navigating to Main Menu (UI_SCREEN_MAIN_MENU)");
+    hal_display_clear(HAL_COLOR_BLACK);
+    hal_display_flush();
 
     /* Navigate to main menu — UI task will handle rendering from here */
     ui_manager_navigate_to(UI_SCREEN_MAIN_MENU);
 
     /* app_main returns — FreeRTOS tasks continue running */
-    ESP_LOGI(TAG, "app_main() returning, system running via FreeRTOS tasks");
+    ESP_LOGI(TAG, "[BOOT] app_main() completed. System running autonomously via FreeRTOS tasks.");
 }

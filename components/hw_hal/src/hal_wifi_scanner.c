@@ -246,8 +246,9 @@ esp_err_t hal_wifi_scanner_init(void)
     ESP_LOGI(TAG, "Initializing WiFi scanner");
     s_state.module_state.status = HAL_STATUS_INITIALIZING;
 
-    /* Initialize WiFi in station mode (no connection) */
+    /* Initialize WiFi in station mode without NVS storage requirement */
     wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
+    wifi_cfg.nvs_enable = false;
     esp_err_t err = esp_wifi_init(&wifi_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_init failed: %s", esp_err_to_name(err));

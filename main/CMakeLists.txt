@@ -9,4 +9,6 @@ idf_component_register(
         domain
         ui
         common
+        nvs_flash
+        esp_timer
 )

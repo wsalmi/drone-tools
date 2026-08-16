@@ -26,8 +26,60 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
 endif()
 
+# Export compile_commands.json for static analysis (Requirement 11.1)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Enable warnings
 add_compile_options(-Wall -Wextra -Wpedantic)
+
+# =============================================================================
+# Sanitizer support (additive — when SANITIZER is not set, builds work as before)
+# Usage:
+#   cmake -S test/host -B build/host_asan -DSANITIZER=address
+#   cmake -S test/host -B build/host_tsan -DSANITIZER=thread
+# ASan+UBSan and TSan are mutually exclusive and require separate build dirs.
+# =============================================================================
+set(SANITIZER "" CACHE STRING "Sanitizer mode: address (ASan+UBSan) or thread (TSan)")
+
+if(SANITIZER STREQUAL "address")
+    message(STATUS "[Sanitizer] Enabling AddressSanitizer + UndefinedBehaviorSanitizer")
+    set(SANITIZER_FLAGS "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-optimize-sibling-calls")
+    set(SANITIZER_LINK_FLAGS "-fsanitize=address,undefined")
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -fno-optimize-sibling-calls)
+    add_link_options(-fsanitize=address,undefined)
+
+    # Configure ASan/UBSan runtime options for CTest
+    # Note: abort_on_error=0 makes ASan _exit() instead of abort(), which allows
+    # CTest WILL_FAIL to work correctly with sanitizer probes (signals bypass WILL_FAIL).
+    # Leak detection is only supported on Linux; macOS/AppleClang does not support it.
+    if(APPLE)
+        set(ASAN_ENV "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=0:print_stats=1:check_initialization_order=1")
+    else()
+        set(ASAN_ENV "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:abort_on_error=0:print_stats=1:check_initialization_order=1")
+    endif()
+    set(UBSAN_ENV "UBSAN_OPTIONS=halt_on_error=1:abort_on_error=0:print_stacktrace=1:suppressions=${CMAKE_CURRENT_SOURCE_DIR}/ubsan_suppressions.txt")
+
+elseif(SANITIZER STREQUAL "thread")
+    # TSan may have limited support on macOS/AppleClang. Warn but still configure.
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag("-fsanitize=thread" COMPILER_SUPPORTS_TSAN)
+    if(NOT COMPILER_SUPPORTS_TSAN)
+        message(WARNING "[Sanitizer] ThreadSanitizer is not supported by the current compiler. "
+                        "TSan build will be configured but may fail to compile. "
+                        "Use GCC on Linux for full TSan support in CI.")
+    endif()
+
+    message(STATUS "[Sanitizer] Enabling ThreadSanitizer")
+    set(SANITIZER_FLAGS "-fsanitize=thread")
+    set(SANITIZER_LINK_FLAGS "-fsanitize=thread")
+    add_compile_options(-fsanitize=thread)
+    add_link_options(-fsanitize=thread)
+
+    set(TSAN_ENV "TSAN_OPTIONS=halt_on_error=1:abort_on_error=0:second_deadlock_stack=1")
+
+elseif(NOT SANITIZER STREQUAL "")
+    message(FATAL_ERROR "[Sanitizer] Unknown SANITIZER value '${SANITIZER}'. Use 'address' or 'thread'.")
+endif()
 
 # =============================================================================
 # Project paths
@@ -118,11 +170,13 @@ add_library(hal_mocks STATIC
     ${MOCKS_DIR}/hal_wifi_scanner_mock.c
     ${MOCKS_DIR}/hal_ble_scanner_mock.c
     ${MOCKS_DIR}/hal_buzzer_mock.c
+    ${MOCKS_DIR}/hal_keyboard_mock.c
 )
 target_include_directories(hal_mocks PUBLIC
     ${MOCKS_DIR}/include
     ${COMPONENTS_DIR}/common/include
-    ${COMPONENTS_DIR}/hal/include
+    ${COMPONENTS_DIR}/hw_hal/include
+    ${COMPONENTS_DIR}/ui/include
 )
 target_link_libraries(hal_mocks PUBLIC esp_idf_mocks)
 
@@ -132,13 +186,19 @@ target_link_libraries(hal_mocks PUBLIC esp_idf_mocks)
 # Minimum iterations for property-based tests
 add_compile_definitions(PBT_MIN_TRIALS=100)
 
+# Reproducible seed for PBT — override with -DPBT_SEED=<value> on the command line
+if(NOT DEFINED PBT_SEED)
+    set(PBT_SEED 0 CACHE STRING "Seed for property-based tests (0 = time-based)")
+endif()
+add_compile_definitions(PBT_SEED=${PBT_SEED})
+
 # =============================================================================
 # Include paths for component sources
 # =============================================================================
 set(COMPONENT_INCLUDE_DIRS
     ${COMPONENTS_DIR}/common/include
     ${COMPONENTS_DIR}/domain/include
-    ${COMPONENTS_DIR}/hal/include
+    ${COMPONENTS_DIR}/hw_hal/include
     ${COMPONENTS_DIR}/services/include
     ${COMPONENTS_DIR}/ui/include
     ${MOCKS_DIR}/include
@@ -176,6 +236,17 @@ function(add_unit_test TEST_NAME)
         ${UT_LIBRARIES}
     )
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+
+    # Propagate sanitizer runtime environment to CTest
+    if(SANITIZER STREQUAL "address")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            ENVIRONMENT "${ASAN_ENV};${UBSAN_ENV}"
+        )
+    elseif(SANITIZER STREQUAL "thread")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            ENVIRONMENT "${TSAN_ENV}"
+        )
+    endif()
 endfunction()
 
 # =============================================================================
@@ -198,6 +269,17 @@ function(add_pbt_test TEST_NAME)
         ${PBT_LIBRARIES}
     )
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+
+    # Propagate sanitizer runtime environment to CTest
+    if(SANITIZER STREQUAL "address")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            ENVIRONMENT "${ASAN_ENV};${UBSAN_ENV}"
+        )
+    elseif(SANITIZER STREQUAL "thread")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            ENVIRONMENT "${TSAN_ENV}"
+        )
+    endif()
 endfunction()
 
 # =============================================================================
@@ -250,7 +332,7 @@ if(EXISTS "${COMPONENTS_DIR}/domain/src/aircraft_registry.c")
     target_include_directories(aircraft_registry PUBLIC
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(aircraft_registry PUBLIC esp_idf_mocks)
@@ -267,12 +349,12 @@ endif()
 # =============================================================================
 # HAL GPS - NMEA Parser library (for testing, built with mock flag)
 # =============================================================================
-if(EXISTS "${COMPONENTS_DIR}/hal/src/hal_gps.c")
+if(EXISTS "${COMPONENTS_DIR}/hw_hal/src/hal_gps.c")
     add_library(hal_gps_parser STATIC
-        ${COMPONENTS_DIR}/hal/src/hal_gps.c
+        ${COMPONENTS_DIR}/hw_hal/src/hal_gps.c
     )
     target_include_directories(hal_gps_parser PUBLIC
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${COMPONENTS_DIR}/common/include
         ${MOCKS_DIR}/include
     )
@@ -323,7 +405,7 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/mavlink_decoder.c")
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(mavlink_decoder PUBLIC esp_idf_mocks m)
@@ -341,12 +423,12 @@ endif()
 # =============================================================================
 # Hardware Manager - HAL component library (for testing)
 # =============================================================================
-if(EXISTS "${COMPONENTS_DIR}/hal/src/hw_manager.c")
+if(EXISTS "${COMPONENTS_DIR}/hw_hal/src/hw_manager.c")
     add_library(hw_manager STATIC
-        ${COMPONENTS_DIR}/hal/src/hw_manager.c
+        ${COMPONENTS_DIR}/hw_hal/src/hw_manager.c
     )
     target_include_directories(hw_manager PUBLIC
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${COMPONENTS_DIR}/common/include
         ${MOCKS_DIR}/include
     )
@@ -372,7 +454,7 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/remoteid_decoder.c")
     target_include_directories(remoteid_decoder PUBLIC
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${COMPONENTS_DIR}/common/include
         ${MOCKS_DIR}/include
     )
@@ -382,6 +464,46 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/remoteid_decoder.c")
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_remoteid_decoder.c")
         add_unit_test(test_remoteid_decoder
             SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_remoteid_decoder.c
+            LIBRARIES remoteid_decoder
+        )
+    endif()
+
+    # RemoteID Bounds Safety Unit Tests (Task 5.1 — CQR-REMOTEID-003)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_remoteid_bounds.c")
+        add_unit_test(test_remoteid_bounds
+            SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_remoteid_bounds.c
+            LIBRARIES remoteid_decoder
+        )
+    endif()
+
+    # RemoteID Bounds PBT — Property 5: Parser bounds safety
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_pbt_remoteid_bounds.c")
+        add_pbt_test(test_pbt_remoteid_bounds
+            SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_pbt_remoteid_bounds.c
+            LIBRARIES remoteid_decoder
+        )
+    endif()
+
+    # RemoteID CRC Unit Tests + Property 6 PBT (Task 5.2 — CQR-REMOTEID-001)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_remoteid_crc.c")
+        add_pbt_test(test_remoteid_crc
+            SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_remoteid_crc.c
+            LIBRARIES remoteid_decoder
+        )
+    endif()
+
+    # RemoteID Coordinates — Property 7: Joint coordinate validity (Task 5.3)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_remoteid_coordinates.c")
+        add_pbt_test(test_remoteid_coordinates
+            SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_remoteid_coordinates.c
+            LIBRARIES remoteid_decoder
+        )
+    endif()
+
+    # RemoteID State Preservation — Property 8: Parse-then-commit preserves state (Task 5.4)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_pbt_remoteid_state_preservation.c")
+        add_pbt_test(test_pbt_remoteid_state_preservation
+            SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_pbt_remoteid_state_preservation.c
             LIBRARIES remoteid_decoder
         )
     endif()
@@ -397,7 +519,7 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/geolocation_service.c")
     target_include_directories(geolocation_service PUBLIC
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(geolocation_service PUBLIC esp_idf_mocks hal_mocks m)
@@ -422,7 +544,7 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/elrs_decoder.c")
     target_include_directories(elrs_decoder PUBLIC
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${COMPONENTS_DIR}/common/include
         ${MOCKS_DIR}/include
     )
@@ -448,7 +570,7 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/protocol_classifier.c")
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(protocol_classifier PUBLIC esp_idf_mocks protocol_signatures)
@@ -473,7 +595,7 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/telemetry_decoder.c")
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(telemetry_decoder PUBLIC
@@ -507,7 +629,7 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/detection_service.c")
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(detection_service PUBLIC esp_idf_mocks hal_mocks hw_manager)
@@ -532,7 +654,7 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/spectrum_analyzer.c")
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(spectrum_analyzer PUBLIC esp_idf_mocks hal_mocks m)
@@ -558,7 +680,7 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/pilot_locator.c")
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(pilot_locator PUBLIC esp_idf_mocks hal_mocks m)
@@ -585,7 +707,7 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/alert_engine.c")
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(alert_engine PUBLIC esp_idf_mocks hal_mocks geolocation_service)
@@ -608,24 +730,43 @@ add_library(hal_display_mock STATIC
 target_include_directories(hal_display_mock PUBLIC
     ${MOCKS_DIR}/include
     ${COMPONENTS_DIR}/common/include
-    ${COMPONENTS_DIR}/hal/include
+    ${COMPONENTS_DIR}/hw_hal/include
 )
 target_link_libraries(hal_display_mock PUBLIC esp_idf_mocks)
 
-# =============================================================================
-# UI Manager - UI component library (for testing)
-# =============================================================================
 if(EXISTS "${COMPONENTS_DIR}/ui/src/ui_manager.c")
     add_library(ui_manager STATIC
         ${COMPONENTS_DIR}/ui/src/ui_manager.c
+        ${COMPONENTS_DIR}/ui/src/screen_splash.c
+        ${COMPONENTS_DIR}/ui/src/screen_menu.c
+        ${COMPONENTS_DIR}/ui/src/screen_hud.c
+        ${COMPONENTS_DIR}/ui/src/screen_modes.c
+        ${COMPONENTS_DIR}/ui/src/screen_spectrum.c
+        ${COMPONENTS_DIR}/ui/src/screen_settings.c
+        ${COMPONENTS_DIR}/ui/src/screen_log.c
+        ${COMPONENTS_DIR}/ui/src/screen_scanner.c
+        ${COMPONENTS_DIR}/ui/src/screen_map.c
     )
     target_include_directories(ui_manager PUBLIC
         ${COMPONENTS_DIR}/ui/include
+        ${COMPONENTS_DIR}/domain/include
+        ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
-    target_link_libraries(ui_manager PUBLIC esp_idf_mocks hal_display_mock)
+    target_link_libraries(ui_manager PUBLIC
+        esp_idf_mocks
+        hal_display_mock
+        hal_sd_mock
+        aircraft_registry
+        geolocation_service
+        alert_engine
+        spectrum_analyzer
+        config_store
+        data_logger
+        m
+    )
 
     # UI Manager Unit Tests
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_ui_manager.c")
@@ -633,6 +774,7 @@ if(EXISTS "${COMPONENTS_DIR}/ui/src/ui_manager.c")
             SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_ui_manager.c
             LIBRARIES ui_manager hal_display_mock
         )
+        target_link_libraries(test_ui_manager PRIVATE m)
     endif()
 endif()
 
@@ -647,7 +789,7 @@ if(EXISTS "${COMPONENTS_DIR}/ui/src/screen_scanner.c")
         ${COMPONENTS_DIR}/ui/include
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(screen_scanner PUBLIC esp_idf_mocks hal_display_mock ui_manager)
@@ -673,7 +815,7 @@ if(EXISTS "${COMPONENTS_DIR}/ui/src/screen_map.c")
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(screen_map PUBLIC esp_idf_mocks hal_display_mock ui_manager geolocation_service m)
@@ -689,6 +831,59 @@ if(EXISTS "${COMPONENTS_DIR}/ui/src/screen_map.c")
 endif()
 
 # =============================================================================
+# Screen HUD - UI component library (for testing)
+# =============================================================================
+if(EXISTS "${COMPONENTS_DIR}/ui/src/screen_hud.c")
+    add_library(screen_hud STATIC
+        ${COMPONENTS_DIR}/ui/src/screen_hud.c
+    )
+    target_include_directories(screen_hud PUBLIC
+        ${COMPONENTS_DIR}/ui/include
+        ${COMPONENTS_DIR}/services/include
+        ${COMPONENTS_DIR}/domain/include
+        ${COMPONENTS_DIR}/common/include
+        ${COMPONENTS_DIR}/hw_hal/include
+        ${MOCKS_DIR}/include
+    )
+    target_link_libraries(screen_hud PUBLIC esp_idf_mocks hal_display_mock ui_manager geolocation_service aircraft_registry m)
+
+    # Screen HUD Unit Tests
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_screen_hud.c")
+        add_unit_test(test_screen_hud
+            SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_screen_hud.c
+            LIBRARIES screen_hud ui_manager hal_display_mock geolocation_service aircraft_registry
+        )
+        target_link_libraries(test_screen_hud PRIVATE m)
+    endif()
+endif()
+
+# =============================================================================
+# Screen Modes - UI component library (for testing)
+# =============================================================================
+if(EXISTS "${COMPONENTS_DIR}/ui/src/screen_modes.c")
+    add_library(screen_modes STATIC
+        ${COMPONENTS_DIR}/ui/src/screen_modes.c
+    )
+    target_include_directories(screen_modes PUBLIC
+        ${COMPONENTS_DIR}/ui/include
+        ${COMPONENTS_DIR}/services/include
+        ${COMPONENTS_DIR}/domain/include
+        ${COMPONENTS_DIR}/common/include
+        ${COMPONENTS_DIR}/hw_hal/include
+        ${MOCKS_DIR}/include
+    )
+    target_link_libraries(screen_modes PUBLIC esp_idf_mocks hal_display_mock ui_manager alert_engine)
+
+    # Screen Modes Unit Tests
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_screen_modes.c")
+        add_unit_test(test_screen_modes
+            SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_screen_modes.c
+            LIBRARIES screen_modes ui_manager hal_display_mock alert_engine
+        )
+    endif()
+endif()
+
+# =============================================================================
 # HAL SD Mock library (for data logger testing)
 # =============================================================================
 add_library(hal_sd_mock STATIC
@@ -697,7 +892,7 @@ add_library(hal_sd_mock STATIC
 target_include_directories(hal_sd_mock PUBLIC
     ${MOCKS_DIR}/include
     ${COMPONENTS_DIR}/common/include
-    ${COMPONENTS_DIR}/hal/include
+    ${COMPONENTS_DIR}/hw_hal/include
 )
 target_link_libraries(hal_sd_mock PUBLIC esp_idf_mocks)
 
@@ -712,7 +907,7 @@ if(EXISTS "${COMPONENTS_DIR}/services/src/data_logger.c")
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(data_logger PUBLIC esp_idf_mocks hal_sd_mock)
@@ -738,7 +933,7 @@ if(EXISTS "${PROJECT_ROOT}/main/data_pipeline.c")
         ${COMPONENTS_DIR}/services/include
         ${COMPONENTS_DIR}/domain/include
         ${COMPONENTS_DIR}/common/include
-        ${COMPONENTS_DIR}/hal/include
+        ${COMPONENTS_DIR}/hw_hal/include
         ${MOCKS_DIR}/include
     )
     target_link_libraries(data_pipeline PUBLIC esp_idf_mocks)
@@ -749,5 +944,101 @@ if(EXISTS "${PROJECT_ROOT}/main/data_pipeline.c")
             SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_data_pipeline.c
             LIBRARIES data_pipeline
         )
+    endif()
+endif()
+
+# =============================================================================
+# CTest / JUnit Integration Notes
+# =============================================================================
+# CTest discovers all test executables registered via add_test() automatically.
+# JUnit XML output: ctest --test-dir build/host --output-junit results.xml
+# Reproducible PBT: cmake -DPBT_SEED=12345 ../test/host
+# =============================================================================
+
+# =============================================================================
+# Infrastructure validation test (CQR-CI-INFRA)
+# Validates CTest discovery, doubles isolation, and PBT configuration.
+# =============================================================================
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_ctest_infrastructure.c")
+    add_unit_test(test_ctest_infrastructure
+        SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_ctest_infrastructure.c
+    )
+    target_compile_definitions(test_ctest_infrastructure PRIVATE
+        PROJECT_ROOT_PATH="${PROJECT_ROOT}"
+        CTEST_TESTFILE_PATH="${CMAKE_CURRENT_BINARY_DIR}/CTestTestfile.cmake"
+    )
+endif()
+
+# =============================================================================
+# Sanitizer Probe Fixtures (CQR-CI-SANITIZER-PROBES)
+# =============================================================================
+# These tests INTENTIONALLY trigger memory errors to validate that the sanitizer
+# gate catches them. They are excluded from the default CTest run (no label
+# filter) and included only when running with label "sanitizer_probe".
+#
+# Usage:
+#   ctest --test-dir build/host_asan -L sanitizer_probe
+#
+# Each probe MUST fail under ASan/UBSan/TSan. If a probe passes, the gate is
+# misconfigured or the sanitizer is not active.
+# =============================================================================
+if(SANITIZER STREQUAL "address" OR SANITIZER STREQUAL "thread")
+    set(SANITIZER_PROBES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sanitizer_probes")
+
+    if(SANITIZER STREQUAL "address")
+        # Heap buffer over-read probe
+        if(EXISTS "${SANITIZER_PROBES_DIR}/probe_heap_overread.c")
+            add_executable(probe_heap_overread
+                ${SANITIZER_PROBES_DIR}/probe_heap_overread.c
+            )
+            add_test(NAME probe_heap_overread COMMAND probe_heap_overread)
+            set_tests_properties(probe_heap_overread PROPERTIES
+                LABELS "sanitizer_probe"
+                WILL_FAIL TRUE
+                ENVIRONMENT "${ASAN_ENV};${UBSAN_ENV}"
+            )
+        endif()
+
+        # Use-after-free probe
+        if(EXISTS "${SANITIZER_PROBES_DIR}/probe_use_after_free.c")
+            add_executable(probe_use_after_free
+                ${SANITIZER_PROBES_DIR}/probe_use_after_free.c
+            )
+            add_test(NAME probe_use_after_free COMMAND probe_use_after_free)
+            set_tests_properties(probe_use_after_free PROPERTIES
+                LABELS "sanitizer_probe"
+                WILL_FAIL TRUE
+                ENVIRONMENT "${ASAN_ENV};${UBSAN_ENV}"
+            )
+        endif()
+
+        # Double-free probe
+        if(EXISTS "${SANITIZER_PROBES_DIR}/probe_double_free.c")
+            add_executable(probe_double_free
+                ${SANITIZER_PROBES_DIR}/probe_double_free.c
+            )
+            add_test(NAME probe_double_free COMMAND probe_double_free)
+            set_tests_properties(probe_double_free PROPERTIES
+                LABELS "sanitizer_probe"
+                WILL_FAIL TRUE
+                ENVIRONMENT "${ASAN_ENV};${UBSAN_ENV}"
+            )
+        endif()
+    endif()
+
+    if(SANITIZER STREQUAL "thread")
+        # Data race probe
+        if(EXISTS "${SANITIZER_PROBES_DIR}/probe_data_race.c")
+            add_executable(probe_data_race
+                ${SANITIZER_PROBES_DIR}/probe_data_race.c
+            )
+            target_link_libraries(probe_data_race PRIVATE pthread)
+            add_test(NAME probe_data_race COMMAND probe_data_race)
+            set_tests_properties(probe_data_race PROPERTIES
+                LABELS "sanitizer_probe"
+                WILL_FAIL TRUE
+                ENVIRONMENT "${TSAN_ENV}"
+            )
+        endif()
     endif()
 endif()

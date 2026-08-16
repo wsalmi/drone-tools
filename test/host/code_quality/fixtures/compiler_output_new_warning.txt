@@ -1,0 +1,2 @@
+components/services/src/remoteid_decoder.c:42:5: warning: unused variable 'temp' [-Wunused-variable]
+components/services/src/remoteid_decoder.c:87:12: warning: array subscript is above array bounds [-Warray-bounds]

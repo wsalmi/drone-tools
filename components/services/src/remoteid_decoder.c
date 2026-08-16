@@ -15,6 +15,13 @@
 #include <math.h>
 
 /* ========================================================================
+ * Forward Declarations and Module-level State
+ * ======================================================================== */
+
+static bool remoteid_verify_message_crc(const uint8_t *msg);
+static remoteid_metrics_t s_remoteid_metrics;
+
+/* ========================================================================
  * Internal Constants
  * ======================================================================== */
 
@@ -149,6 +156,44 @@ static esp_err_t decode_basic_id(const uint8_t *msg, remoteid_data_t *out)
 }
 
 /**
+ * @brief Validate a raw latitude value individually.
+ *
+ * A latitude is valid when it is non-sentinel (non-zero) and within the
+ * ASTM F3411 interval [-90°, 90°] after scaling, i.e. raw in [-900000000, 900000000].
+ *
+ * Validates: Requirements 5.5, 5.6, 5.7, 12.1, 12.4
+ */
+static bool remoteid_lat_valid(int32_t lat_raw)
+{
+    if (lat_raw == REMOTEID_LAT_INVALID) {
+        return false;
+    }
+    if (lat_raw < REMOTEID_LAT_RAW_MIN || lat_raw > REMOTEID_LAT_RAW_MAX) {
+        return false;
+    }
+    return true;
+}
+
+/**
+ * @brief Validate a raw longitude value individually.
+ *
+ * A longitude is valid when it is non-sentinel (non-zero) and within the
+ * ASTM F3411 interval [-180°, 180°] after scaling, i.e. raw in [-1800000000, 1800000000].
+ *
+ * Validates: Requirements 5.5, 5.6, 5.7, 12.1, 12.4
+ */
+static bool remoteid_lon_valid(int32_t lon_raw)
+{
+    if (lon_raw == REMOTEID_LON_INVALID) {
+        return false;
+    }
+    if (lon_raw < REMOTEID_LON_RAW_MIN || lon_raw > REMOTEID_LON_RAW_MAX) {
+        return false;
+    }
+    return true;
+}
+
+/**
  * @brief Decode a single Location/Vector message.
  */
 static esp_err_t decode_location(const uint8_t *msg, remoteid_data_t *out)
@@ -185,8 +230,10 @@ static esp_err_t decode_location(const uint8_t *msg, remoteid_data_t *out)
     int32_t lon_raw = read_int32_le(&msg[LOC_LON_OFFSET]);
     out->longitude = (double)lon_raw * REMOTEID_LAT_LON_SCALE;
 
-    /* Position is valid if coordinates are non-zero */
-    out->has_position = (lat_raw != REMOTEID_LAT_INVALID || lon_raw != REMOTEID_LON_INVALID);
+    /* Position is valid only if BOTH latitude AND longitude are individually valid:
+     * non-sentinel, correctly scaled, and within protocol intervals.
+     * (Fix for CQR-REMOTEID-002: was using logical OR) */
+    out->has_position = (remoteid_lat_valid(lat_raw) && remoteid_lon_valid(lon_raw));
 
     /* Geodetic altitude (bytes 15-16): uint16, altitude = raw * 0.5 - 1000 */
     uint16_t alt_geo_raw = read_uint16_le(&msg[LOC_ALT_GEO_OFFSET]);
@@ -208,8 +255,10 @@ static esp_err_t decode_system(const uint8_t *msg, remoteid_data_t *out)
     int32_t op_lon_raw = read_int32_le(&msg[SYS_OP_LON_OFFSET]);
     out->operator_lon = (double)op_lon_raw * REMOTEID_LAT_LON_SCALE;
 
-    /* Operator location is valid if coordinates are non-zero */
-    out->has_operator_location = (op_lat_raw != 0 || op_lon_raw != 0);
+    /* Operator location is valid only if BOTH lat AND lon are individually valid:
+     * non-sentinel, correctly scaled, and within protocol intervals.
+     * (Fix for CQR-REMOTEID-002: was using logical OR) */
+    out->has_operator_location = (remoteid_lat_valid(op_lat_raw) && remoteid_lon_valid(op_lon_raw));
 
     return ESP_OK;
 }
@@ -292,65 +341,55 @@ esp_err_t remoteid_decode_wifi(const uint8_t *frame, uint16_t len, remoteid_data
 {
     /* Validate arguments */
     if (frame == NULL || out == NULL) {
+        s_remoteid_metrics.rejected[RID_REJECT_NULL]++;
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Validate minimum frame length */
-    if (len < REMOTEID_WIFI_MIN_LEN) {
-        return ESP_ERR_INVALID_SIZE;
+    /* --- Safe bounds validation (parse-then-commit) --- */
+    remoteid_validation_result_t val_result;
+    esp_err_t val_err = remoteid_validate_frame_safe(frame, len, false, &val_result);
+    if (val_err != ESP_OK) {
+        /* Increment the specific rejection reason from validation */
+        if (val_result.reason > RID_REJECT_NONE && val_result.reason <= RID_REJECT_CRC) {
+            s_remoteid_metrics.rejected[val_result.reason]++;
+        }
+        return val_err;
     }
 
-    /* Initialize output */
-    remoteid_data_init(out);
-
-    /* Verify OUI (FA:0B:BC) */
-    if (memcmp(&frame[REMOTEID_WIFI_OUI_OFFSET], REMOTEID_WIFI_OUI, 3) != 0) {
-        return ERR_DECODE_UNKNOWN_FMT;
-    }
-
-    /* Verify OUI Type (0x0D) */
-    if (frame[REMOTEID_WIFI_OUI_TYPE_OFFSET] != REMOTEID_WIFI_OUI_TYPE) {
-        return ERR_DECODE_UNKNOWN_FMT;
-    }
+    /* Decode into local staging — only commit to out after complete validation */
+    remoteid_data_t staging;
+    remoteid_data_init(&staging);
 
     /* Message counter (byte 4) — informational, number of messages that follow */
-    uint8_t msg_counter = frame[REMOTEID_WIFI_MSG_COUNTER_OFFSET];
-
-    /* Calculate available payload for messages */
+    uint8_t num_messages = val_result.message_count;
     uint16_t payload_start = REMOTEID_WIFI_MSG_START_OFFSET;
-    uint16_t payload_len = len - payload_start;
 
-    /* Validate: payload must contain at least one message */
-    if (payload_len < REMOTEID_MSG_SIZE) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    /* Calculate actual number of messages based on available data */
-    uint8_t num_messages = payload_len / REMOTEID_MSG_SIZE;
-    if (msg_counter > 0 && msg_counter < num_messages) {
-        num_messages = msg_counter;
-    }
-
-    /* Limit to maximum messages */
-    if (num_messages > REMOTEID_MAX_MESSAGES) {
-        num_messages = REMOTEID_MAX_MESSAGES;
-    }
-
-    if (num_messages == 0) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    /* Decode each message */
+    /* Decode each message with per-message bounds check */
     bool has_basic_id = false;
     esp_err_t last_err = ESP_OK;
 
     for (uint8_t i = 0; i < num_messages; i++) {
-        const uint8_t *msg = &frame[payload_start + (i * REMOTEID_MSG_SIZE)];
+        /* Safe bounds: verify offset + MSG_SIZE <= len */
+        uint16_t msg_offset = payload_start + (uint16_t)(i * REMOTEID_MSG_SIZE);
+
+        /* Overflow check: msg_offset + REMOTEID_MSG_SIZE must not overflow uint16 */
+        if (msg_offset > len || REMOTEID_MSG_SIZE > (len - msg_offset)) {
+            break; /* Stop processing — remaining data is insufficient */
+        }
+
+        const uint8_t *msg = &frame[msg_offset];
+
+        /* CRC-8 validation: compare calculated CRC over protected region with received CRC */
+        if (!remoteid_verify_message_crc(msg)) {
+            s_remoteid_metrics.integrity_errors++;
+            s_remoteid_metrics.rejected[RID_REJECT_CRC]++;
+            return ERR_DECODE_CRC_FAIL;
+        }
+
         uint8_t msg_type = (msg[0] & MSG_TYPE_MASK) >> MSG_TYPE_SHIFT;
 
-        esp_err_t err = decode_single_message(msg, out);
+        esp_err_t err = decode_single_message(msg, &staging);
         if (err != ESP_OK) {
-            /* For invalid message type, report the error */
             if (err == ERR_DECODE_UNKNOWN_FMT) {
                 last_err = err;
             }
@@ -364,91 +403,74 @@ esp_err_t remoteid_decode_wifi(const uint8_t *frame, uint16_t len, remoteid_data
 
     /* If all messages had unknown format, report that */
     if (!has_basic_id && last_err == ERR_DECODE_UNKNOWN_FMT) {
+        s_remoteid_metrics.rejected[RID_REJECT_FORMAT]++;
         return ERR_DECODE_UNKNOWN_FMT;
     }
 
-    /* Validate required fields */
-    return validate_decoded_data(out, has_basic_id);
+    /* Validate required fields on staging */
+    esp_err_t final_err = validate_decoded_data(&staging, has_basic_id);
+    if (final_err != ESP_OK) {
+        s_remoteid_metrics.rejected[RID_REJECT_FORMAT]++;
+        return final_err;
+    }
+
+    /* --- Commit: copy staging to output only after complete validation --- */
+    *out = staging;
+    s_remoteid_metrics.accepted++;
+    return ESP_OK;
 }
 
 esp_err_t remoteid_decode_ble(const uint8_t *adv_data, uint16_t len, remoteid_data_t *out)
 {
     /* Validate arguments */
     if (adv_data == NULL || out == NULL) {
+        s_remoteid_metrics.rejected[RID_REJECT_NULL]++;
         return ESP_ERR_INVALID_ARG;
     }
 
-    /* Validate minimum length */
-    if (len < REMOTEID_BLE_MIN_LEN) {
-        return ESP_ERR_INVALID_SIZE;
+    /* --- Safe bounds validation (parse-then-commit) --- */
+    remoteid_validation_result_t val_result;
+    esp_err_t val_err = remoteid_validate_frame_safe(adv_data, len, true, &val_result);
+    if (val_err != ESP_OK) {
+        /* Increment the specific rejection reason from validation */
+        if (val_result.reason > RID_REJECT_NONE && val_result.reason <= RID_REJECT_CRC) {
+            s_remoteid_metrics.rejected[val_result.reason]++;
+        }
+        return val_err;
     }
 
-    /* Initialize output */
-    remoteid_data_init(out);
+    /* Decode into local staging — only commit to out after complete validation */
+    remoteid_data_t staging;
+    remoteid_data_init(&staging);
 
-    /*
-     * BLE AD structure:
-     * [0]    AD Length
-     * [1]    AD Type (0x16 = Service Data - 16-bit UUID)
-     * [2-3]  UUID16 (0xFFFA little-endian for ASTM F3411)
-     * [4]    Message counter
-     * [5..29] 25-byte ASTM F3411 message
-     *
-     * For message packs, multiple 25-byte messages may follow.
-     */
-
-    uint8_t ad_length = adv_data[0];
-    uint8_t ad_type = adv_data[1];
-
-    /* Validate AD type */
-    if (ad_type != REMOTEID_BLE_AD_TYPE_SERVICE_DATA_16) {
-        return ERR_DECODE_UNKNOWN_FMT;
-    }
-
-    /* Validate UUID16 (little-endian: 0xFA, 0xFF → 0xFFFA) */
-    uint16_t uuid16 = read_uint16_le(&adv_data[2]);
-    if (uuid16 != REMOTEID_BLE_UUID16_ASTM) {
-        return ERR_DECODE_UNKNOWN_FMT;
-    }
-
-    /* Validate AD length consistency:
-     * ad_length = (number of payload bytes after the length byte itself)
-     * Should be at least: 1(type) + 2(UUID) + 1(counter) + 25(message) = 29 */
-    if (ad_length < 29) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    /* Verify total frame length is consistent with AD length */
-    if (len < (uint16_t)(ad_length + 1)) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    /* Message counter at offset 4 */
-    /* uint8_t msg_counter = adv_data[4]; — informational */
-
-    /* Calculate messages available */
     uint16_t msg_start = 5; /* After AD length, type, UUID16, counter */
-    uint16_t payload_available = len - msg_start;
-    uint8_t num_messages = payload_available / REMOTEID_MSG_SIZE;
+    uint8_t num_messages = val_result.message_count;
 
-    if (num_messages == 0) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    /* Limit to maximum */
-    if (num_messages > REMOTEID_MAX_MESSAGES) {
-        num_messages = REMOTEID_MAX_MESSAGES;
-    }
-
-    /* Decode each message */
+    /* Decode each message with per-message bounds check */
     bool has_basic_id = false;
     esp_err_t last_err = ESP_OK;
 
     for (uint8_t i = 0; i < num_messages; i++) {
-        const uint8_t *msg = &adv_data[msg_start + (i * REMOTEID_MSG_SIZE)];
+        /* Safe bounds: verify offset + MSG_SIZE <= len */
+        uint16_t msg_offset = msg_start + (uint16_t)(i * REMOTEID_MSG_SIZE);
+
+        /* Overflow check: msg_offset + REMOTEID_MSG_SIZE must not overflow */
+        if (msg_offset > len || REMOTEID_MSG_SIZE > (len - msg_offset)) {
+            break; /* Stop processing — remaining data is insufficient */
+        }
+
+        const uint8_t *msg = &adv_data[msg_offset];
+
+        /* CRC-8 validation: compare calculated CRC over protected region with received CRC */
+        if (!remoteid_verify_message_crc(msg)) {
+            s_remoteid_metrics.integrity_errors++;
+            s_remoteid_metrics.rejected[RID_REJECT_CRC]++;
+            return ERR_DECODE_CRC_FAIL;
+        }
+
         uint8_t msg_type = (msg[0] & MSG_TYPE_MASK) >> MSG_TYPE_SHIFT;
 
-        esp_err_t err = decode_single_message(msg, out);
+        esp_err_t err = decode_single_message(msg, &staging);
         if (err != ESP_OK) {
             if (err == ERR_DECODE_UNKNOWN_FMT) {
                 last_err = err;
@@ -463,11 +485,21 @@ esp_err_t remoteid_decode_ble(const uint8_t *adv_data, uint16_t len, remoteid_da
 
     /* If all messages had unknown format, report that */
     if (!has_basic_id && last_err == ERR_DECODE_UNKNOWN_FMT) {
+        s_remoteid_metrics.rejected[RID_REJECT_FORMAT]++;
         return ERR_DECODE_UNKNOWN_FMT;
     }
 
-    /* Validate required fields */
-    return validate_decoded_data(out, has_basic_id);
+    /* Validate required fields on staging */
+    esp_err_t final_err = validate_decoded_data(&staging, has_basic_id);
+    if (final_err != ESP_OK) {
+        s_remoteid_metrics.rejected[RID_REJECT_FORMAT]++;
+        return final_err;
+    }
+
+    /* --- Commit: copy staging to output only after complete validation --- */
+    *out = staging;
+    s_remoteid_metrics.accepted++;
+    return ESP_OK;
 }
 
 esp_err_t remoteid_encode(const remoteid_data_t *data, uint8_t *out_buf,
@@ -506,6 +538,8 @@ esp_err_t remoteid_encode(const remoteid_data_t *data, uint8_t *out_buf,
         id_len = BASIC_ID_DATA_LEN;
     }
     memcpy(&out_buf[offset + BASIC_ID_DATA_OFFSET], data->uas_id, id_len);
+    /* Compute and write CRC-8 over the protected region (first 24 bytes) */
+    out_buf[offset + REMOTEID_CRC_OFFSET] = remoteid_crc8(&out_buf[offset], REMOTEID_CRC_PROTECTED_LEN);
     offset += REMOTEID_MSG_SIZE;
 
     /* Encode Location message (Type 1) if position is available */
@@ -553,6 +587,8 @@ esp_err_t remoteid_encode(const remoteid_data_t *data, uint8_t *out_buf,
         /* Pressure altitude (same as geodetic for simplicity) */
         write_uint16_le(&out_buf[offset + LOC_ALT_PRESS_OFFSET], alt_raw);
 
+        /* Compute and write CRC-8 over the protected region (first 24 bytes) */
+        out_buf[offset + REMOTEID_CRC_OFFSET] = remoteid_crc8(&out_buf[offset], REMOTEID_CRC_PROTECTED_LEN);
         offset += REMOTEID_MSG_SIZE;
     }
 
@@ -569,6 +605,8 @@ esp_err_t remoteid_encode(const remoteid_data_t *data, uint8_t *out_buf,
         int32_t op_lon_raw = (int32_t)(data->operator_lon / REMOTEID_LAT_LON_SCALE);
         write_int32_le(&out_buf[offset + SYS_OP_LON_OFFSET], op_lon_raw);
 
+        /* Compute and write CRC-8 over the protected region (first 24 bytes) */
+        out_buf[offset + REMOTEID_CRC_OFFSET] = remoteid_crc8(&out_buf[offset], REMOTEID_CRC_PROTECTED_LEN);
         offset += REMOTEID_MSG_SIZE;
     }
 
@@ -630,8 +668,228 @@ uint8_t remoteid_crc8(const uint8_t *data, uint16_t len)
 }
 
 /* ========================================================================
+ * Module-level Metrics
+ * ======================================================================== */
+
+/* s_remoteid_metrics defined at top of file (forward declaration section) */
+
+esp_err_t remoteid_metrics_snapshot(remoteid_metrics_t *out)
+{
+    if (out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out = s_remoteid_metrics;
+    return ESP_OK;
+}
+
+void remoteid_metrics_reset(void)
+{
+    memset(&s_remoteid_metrics, 0, sizeof(s_remoteid_metrics));
+}
+
+/* ========================================================================
+ * CRC Validation Helper
+ * ======================================================================== */
+
+/**
+ * @brief Validate CRC-8 over a single 25-byte message.
+ *
+ * ASTM F3411: CRC-8/DVB-S2 is computed over the first 24 bytes (protected region)
+ * and compared against byte 24 (CRC position). This is identical for both WiFi
+ * and BLE variants — the CRC region is per-message, not per-frame.
+ *
+ * @param[in] msg  Pointer to 25-byte message.
+ * @return true if CRC matches, false otherwise.
+ */
+static bool remoteid_verify_message_crc(const uint8_t *msg)
+{
+    uint8_t calculated = remoteid_crc8(msg, REMOTEID_CRC_PROTECTED_LEN);
+    uint8_t received = msg[REMOTEID_CRC_OFFSET];
+    return (calculated == received);
+}
+
+/* ========================================================================
  * Frame Validation
  * ======================================================================== */
+
+/**
+ * @brief Safe bounds validation with detailed rejection reason.
+ *
+ * Validates pointers, minimum size, declared length consistency, offsets,
+ * and sums before any field access. Uses the safe comparison form:
+ *   required <= length - offset  (after verifying offset <= length)
+ *
+ * Validates: Requirements 5.1, 5.2, 5.7, 5.8, 5.9, 12.1, 12.6
+ */
+esp_err_t remoteid_validate_frame_safe(const uint8_t *frame, uint16_t len,
+                                       bool is_ble,
+                                       remoteid_validation_result_t *result)
+{
+    /* --- Pointer checks --- */
+    if (result == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    /* Initialize result to invalid */
+    memset(result, 0, sizeof(*result));
+    result->valid = false;
+
+    if (frame == NULL) {
+        result->reason = RID_REJECT_NULL;
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (is_ble) {
+        /* --- BLE validation --- */
+
+        /* Minimum size: AD_length(1) + AD_type(1) + UUID(2) + counter(1) + message(25) = 30 */
+        if (len < REMOTEID_BLE_MIN_LEN) {
+            result->reason = RID_REJECT_TRUNCATED;
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        /* Safe offset check: we need at least 5 bytes of header before messages */
+        uint16_t hdr_size = 5; /* AD_length + AD_type + UUID16(2) + counter */
+
+        /* Check AD type at offset 1 — offset 1 < len already guaranteed by min check */
+        if (frame[1] != REMOTEID_BLE_AD_TYPE_SERVICE_DATA_16) {
+            result->reason = RID_REJECT_FORMAT;
+            return ERR_DECODE_UNKNOWN_FMT;
+        }
+
+        /* Check UUID16 at offsets 2-3 — guaranteed by min check */
+        uint16_t uuid16 = (uint16_t)frame[2] | ((uint16_t)frame[3] << 8);
+        if (uuid16 != REMOTEID_BLE_UUID16_ASTM) {
+            result->reason = RID_REJECT_FORMAT;
+            return ERR_DECODE_UNKNOWN_FMT;
+        }
+
+        /* Declared AD length at offset 0 */
+        uint8_t ad_length = frame[0];
+
+        /* AD length declares how many bytes follow the length byte itself.
+         * Minimum content: type(1) + UUID(2) + counter(1) + message(25) = 29 */
+        if (ad_length < 29) {
+            result->reason = RID_REJECT_DECLARED_LENGTH;
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        /* Safe overflow check: ad_length + 1 must not exceed len.
+         * Since ad_length is uint8 (max 255) and we add 1, max is 256 which fits uint16. */
+        uint16_t declared_total = (uint16_t)ad_length + 1u;
+        if (declared_total > len) {
+            result->reason = RID_REJECT_DECLARED_LENGTH;
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        /* Payload starts after header (offset 5).
+         * Safe: hdr_size(5) <= len already guaranteed by min check. */
+        if (hdr_size > len) {
+            result->reason = RID_REJECT_BOUNDS;
+            return ESP_ERR_INVALID_SIZE;
+        }
+        uint16_t payload_available = len - hdr_size;
+
+        /* Check we have at least one complete message */
+        if (payload_available < REMOTEID_MSG_SIZE) {
+            result->reason = RID_REJECT_BOUNDS;
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        /* Number of complete messages */
+        uint8_t num_messages = (uint8_t)(payload_available / REMOTEID_MSG_SIZE);
+
+        /* Respect declared message counter at offset 4 if smaller, mirroring
+         * the WiFi validation path so both transports behave consistently. */
+        uint8_t msg_counter = frame[4];
+        if (msg_counter > 0 && msg_counter < num_messages) {
+            num_messages = msg_counter;
+        }
+
+        if (num_messages > REMOTEID_MAX_MESSAGES) {
+            num_messages = REMOTEID_MAX_MESSAGES;
+        }
+
+        /* Validate first message type is in range */
+        uint8_t msg_type = (frame[hdr_size] & MSG_TYPE_MASK) >> MSG_TYPE_SHIFT;
+        if (msg_type > REMOTEID_MSG_TYPE_MAX && msg_type != REMOTEID_MSG_TYPE_MSG_PACK) {
+            result->reason = RID_REJECT_FORMAT;
+            return ERR_DECODE_UNKNOWN_FMT;
+        }
+
+        result->valid = true;
+        result->reason = RID_REJECT_NONE;
+        result->available_payload = payload_available;
+        result->message_count = num_messages;
+
+    } else {
+        /* --- WiFi validation --- */
+
+        /* Minimum size: OUI(3) + OUI_type(1) + counter(1) + message(25) = 30 */
+        if (len < REMOTEID_WIFI_MIN_LEN) {
+            result->reason = RID_REJECT_TRUNCATED;
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        uint16_t hdr_size = REMOTEID_WIFI_MSG_START_OFFSET; /* 5 */
+
+        /* Verify OUI — offsets 0-2 guaranteed by min check */
+        if (memcmp(&frame[REMOTEID_WIFI_OUI_OFFSET], REMOTEID_WIFI_OUI, 3) != 0) {
+            result->reason = RID_REJECT_FORMAT;
+            return ERR_DECODE_UNKNOWN_FMT;
+        }
+
+        /* Verify OUI Type — offset 3 guaranteed by min check */
+        if (frame[REMOTEID_WIFI_OUI_TYPE_OFFSET] != REMOTEID_WIFI_OUI_TYPE) {
+            result->reason = RID_REJECT_FORMAT;
+            return ERR_DECODE_UNKNOWN_FMT;
+        }
+
+        /* Payload starts after header (offset 5).
+         * Safe: hdr_size(5) <= len already guaranteed by min check. */
+        if (hdr_size > len) {
+            result->reason = RID_REJECT_BOUNDS;
+            return ESP_ERR_INVALID_SIZE;
+        }
+        uint16_t payload_available = len - hdr_size;
+
+        /* Check at least one complete message */
+        if (payload_available < REMOTEID_MSG_SIZE) {
+            result->reason = RID_REJECT_BOUNDS;
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        /* Number of complete messages */
+        uint8_t num_messages = (uint8_t)(payload_available / REMOTEID_MSG_SIZE);
+
+        /* Respect declared message counter if smaller */
+        uint8_t msg_counter = frame[REMOTEID_WIFI_MSG_COUNTER_OFFSET];
+        if (msg_counter > 0 && msg_counter < num_messages) {
+            num_messages = msg_counter;
+        }
+        if (num_messages > REMOTEID_MAX_MESSAGES) {
+            num_messages = REMOTEID_MAX_MESSAGES;
+        }
+        if (num_messages == 0) {
+            result->reason = RID_REJECT_BOUNDS;
+            return ESP_ERR_INVALID_SIZE;
+        }
+
+        /* Validate first message type */
+        uint8_t msg_type = (frame[hdr_size] & MSG_TYPE_MASK) >> MSG_TYPE_SHIFT;
+        if (msg_type > REMOTEID_MSG_TYPE_MAX && msg_type != REMOTEID_MSG_TYPE_MSG_PACK) {
+            result->reason = RID_REJECT_FORMAT;
+            return ERR_DECODE_UNKNOWN_FMT;
+        }
+
+        result->valid = true;
+        result->reason = RID_REJECT_NONE;
+        result->available_payload = payload_available;
+        result->message_count = num_messages;
+    }
+
+    return ESP_OK;
+}
 
 esp_err_t remoteid_validate_frame(const uint8_t *frame, uint16_t len, bool is_ble)
 {
@@ -639,71 +897,9 @@ esp_err_t remoteid_validate_frame(const uint8_t *frame, uint16_t len, bool is_bl
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (is_ble) {
-        /* BLE validation */
-        if (len < REMOTEID_BLE_MIN_LEN) {
-            return ESP_ERR_INVALID_SIZE;
-        }
-
-        /* Check AD type */
-        if (frame[1] != REMOTEID_BLE_AD_TYPE_SERVICE_DATA_16) {
-            return ERR_DECODE_UNKNOWN_FMT;
-        }
-
-        /* Check UUID16 */
-        uint16_t uuid16 = (uint16_t)frame[2] | ((uint16_t)frame[3] << 8);
-        if (uuid16 != REMOTEID_BLE_UUID16_ASTM) {
-            return ERR_DECODE_UNKNOWN_FMT;
-        }
-
-        /* Check AD length consistency */
-        uint8_t ad_length = frame[0];
-        if (ad_length < 29) {
-            return ESP_ERR_INVALID_SIZE;
-        }
-        if (len < (uint16_t)(ad_length + 1)) {
-            return ESP_ERR_INVALID_SIZE;
-        }
-
-        /* Validate message content with CRC check on first message */
-        uint16_t msg_start = 5;
-        if (len >= msg_start + REMOTEID_MSG_SIZE) {
-            /* Verify message type is within valid range */
-            uint8_t msg_type = (frame[msg_start] & MSG_TYPE_MASK) >> MSG_TYPE_SHIFT;
-            if (msg_type > REMOTEID_MSG_TYPE_MAX && msg_type != REMOTEID_MSG_TYPE_MSG_PACK) {
-                return ERR_DECODE_CRC_FAIL;
-            }
-        }
-    } else {
-        /* WiFi validation */
-        if (len < REMOTEID_WIFI_MIN_LEN) {
-            return ESP_ERR_INVALID_SIZE;
-        }
-
-        /* Verify OUI */
-        if (memcmp(&frame[REMOTEID_WIFI_OUI_OFFSET], REMOTEID_WIFI_OUI, 3) != 0) {
-            return ERR_DECODE_UNKNOWN_FMT;
-        }
-
-        /* Verify OUI Type */
-        if (frame[REMOTEID_WIFI_OUI_TYPE_OFFSET] != REMOTEID_WIFI_OUI_TYPE) {
-            return ERR_DECODE_UNKNOWN_FMT;
-        }
-
-        /* Validate payload has at least one message */
-        uint16_t payload_start = REMOTEID_WIFI_MSG_START_OFFSET;
-        if (len - payload_start < REMOTEID_MSG_SIZE) {
-            return ESP_ERR_INVALID_SIZE;
-        }
-
-        /* Verify first message type is within valid range */
-        uint8_t msg_type = (frame[payload_start] & MSG_TYPE_MASK) >> MSG_TYPE_SHIFT;
-        if (msg_type > REMOTEID_MSG_TYPE_MAX && msg_type != REMOTEID_MSG_TYPE_MSG_PACK) {
-            return ERR_DECODE_CRC_FAIL;
-        }
-    }
-
-    return ESP_OK;
+    remoteid_validation_result_t result;
+    esp_err_t err = remoteid_validate_frame_safe(frame, len, is_ble, &result);
+    return err;
 }
 
 /* ========================================================================
@@ -715,19 +911,15 @@ esp_err_t remoteid_decode(const uint8_t *raw_payload, uint16_t payload_len,
                           remoteid_data_t *rid_out)
 {
     if (raw_payload == NULL || out == NULL) {
+        s_remoteid_metrics.rejected[RID_REJECT_NULL]++;
         return ESP_ERR_INVALID_ARG;
     }
 
     /* Initialize output */
     memset(out, 0, sizeof(decoded_telemetry_t));
 
-    /* Validate frame structure first */
-    esp_err_t val_err = remoteid_validate_frame(raw_payload, payload_len, is_ble);
-    if (val_err != ESP_OK) {
-        return val_err;
-    }
-
-    /* Decode into RemoteID-specific struct */
+    /* Decode into RemoteID-specific struct — validation and metrics are
+     * handled inside remoteid_decode_wifi/ble, preserving exactly-once counting */
     remoteid_data_t rid_data;
     esp_err_t err;
 

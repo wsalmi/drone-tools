@@ -22,6 +22,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_heap_caps.h"
 #endif
 
 /* ========================================================================
@@ -42,6 +43,30 @@
 #define DISPLAY_SPI_FREQ_HZ     40000000  /* 40 MHz */
 #define DISPLAY_FB_SIZE         (HAL_DISPLAY_WIDTH * HAL_DISPLAY_HEIGHT * 2)
 
+/*
+ * Maximum bytes per SPI transaction when flushing the framebuffer.
+ *
+ * The ESP32-S3 GPSPI DMA transfer-length register is 18 bits wide
+ * (SPI_LL_DMA_MAX_BIT_LEN == 1 << 18), so a single transaction can carry at
+ * most 32768 bytes. The framebuffer is 240*135*2 = 64800 bytes, so it MUST
+ * be split — submitting it whole is rejected by the SPI driver with
+ * ESP_ERR_INVALID_ARG and nothing reaches the panel at all.
+ * 16 KB keeps a comfortable margin below the hardware ceiling.
+ */
+#define DISPLAY_SPI_CHUNK_SIZE  (16 * 1024)
+
+/*
+ * ST7789V2 135x240 panel offset within the controller's 240x320 GRAM.
+ *
+ * This panel's visible area does not start at GRAM address (0,0). Without
+ * these offsets, CASET/RASET address a region of GRAM that does not overlap
+ * any visible pixel, so nothing is drawn even though SPI transfers succeed
+ * and the backlight is on. Values correspond to the MADCTL landscape mode
+ * (MX+MV) used by display_hw_init() below.
+ */
+#define DISPLAY_X_OFFSET         40
+#define DISPLAY_Y_OFFSET         52
+
 /* Font: 6x8 pixel monospace (ASCII 32–126) */
 #define FONT_WIDTH              6
 #define FONT_HEIGHT             8
@@ -58,6 +83,30 @@
 #define ST7789_RAMWR            0x2C
 #define ST7789_MADCTL           0x36
 #define ST7789_COLMOD           0x3A
+
+/* ST7789 panel/power configuration commands (required for a stable image) */
+#define ST7789_RAMCTRL          0xB0
+#define ST7789_PORCTRL          0xB2
+#define ST7789_GCTRL            0xB7
+#define ST7789_VCOMS            0xBB
+#define ST7789_LCMCTRL          0xC0
+#define ST7789_VDVVRHEN         0xC2
+#define ST7789_VRHS             0xC3
+#define ST7789_VDVS             0xC4
+#define ST7789_FRCTRL2          0xC6
+#define ST7789_PWCTRL1          0xD0
+#define ST7789_PVGAMCTRL        0xE0
+#define ST7789_NVGAMCTRL        0xE1
+
+/*
+ * MADCTL value for the 240x135 landscape orientation used by this firmware.
+ *
+ * MX (0x40) mirrors the column order and MV (0x20) exchanges rows/columns,
+ * which together rotate the native 135x240 panel into 240x135. Bit ML (0x10)
+ * must NOT be set here: it only reverses the panel's vertical refresh order
+ * and does not participate in the rotation.
+ */
+#define DISPLAY_MADCTL_LANDSCAPE 0x60
 
 /* ========================================================================
  * Built-in 6x8 Font Data (ASCII 32–126)
@@ -192,15 +241,27 @@ static struct {
 
 #ifndef CONFIG_HAL_DISPLAY_MOCK
 
+/*
+ * Scratch area for the command byte and short parameter payloads.
+ *
+ * The SPI bus owns a DMA channel, so every tx_buffer handed to the driver must
+ * live in DMA-capable RAM. A static buffer (always internal DRAM) makes that
+ * guarantee explicit instead of relying on where a local happens to land.
+ * Slot 0 holds the command; slots 1..N hold its parameters. Sized for the
+ * longest payload used below (14-byte gamma tables).
+ */
+static uint8_t display_scratch[16];
+
 /**
  * @brief Send a command byte to the ST7789.
  */
 static esp_err_t display_send_cmd(uint8_t cmd)
 {
+    display_scratch[0] = cmd;
     gpio_set_level(DISPLAY_PIN_DC, 0);  /* Command mode */
     spi_transaction_t t = {
         .length = 8,
-        .tx_buffer = &cmd,
+        .tx_buffer = display_scratch,
     };
     return spi_device_polling_transmit(display_ctx.spi_handle, &t);
 }
@@ -210,6 +271,9 @@ static esp_err_t display_send_cmd(uint8_t cmd)
  */
 static esp_err_t display_send_data(const uint8_t *data, size_t len)
 {
+    if (len == 0) {
+        return ESP_OK;
+    }
     gpio_set_level(DISPLAY_PIN_DC, 1);  /* Data mode */
     spi_transaction_t t = {
         .length = len * 8,
@@ -219,29 +283,55 @@ static esp_err_t display_send_data(const uint8_t *data, size_t len)
 }
 
 /**
+ * @brief Send a command followed by its parameter bytes.
+ *
+ * Parameters are staged in the DMA-safe scratch buffer before transmission.
+ */
+static esp_err_t display_send_cmd_params(uint8_t cmd, const uint8_t *params,
+                                          size_t len)
+{
+    if (len > sizeof(display_scratch) - 1) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    /* Stage parameters first: display_send_cmd() overwrites slot 0 only. */
+    if (len > 0) {
+        memcpy(&display_scratch[1], params, len);
+    }
+
+    esp_err_t err = display_send_cmd(cmd);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return display_send_data(&display_scratch[1], len);
+}
+
+/**
  * @brief Set the display window for pixel data writes.
  */
 static esp_err_t display_set_window(uint16_t x0, uint16_t y0,
                                      uint16_t x1, uint16_t y1)
 {
+    /* Translate logical framebuffer coordinates into GRAM addresses */
+    uint16_t gx0 = x0 + DISPLAY_X_OFFSET;
+    uint16_t gx1 = x1 + DISPLAY_X_OFFSET;
+    uint16_t gy0 = y0 + DISPLAY_Y_OFFSET;
+    uint16_t gy1 = y1 + DISPLAY_Y_OFFSET;
+
     /* Column address set */
-    uint8_t col_data[4] = {
-        (uint8_t)(x0 >> 8), (uint8_t)(x0 & 0xFF),
-        (uint8_t)(x1 >> 8), (uint8_t)(x1 & 0xFF)
+    const uint8_t col_data[4] = {
+        (uint8_t)(gx0 >> 8), (uint8_t)(gx0 & 0xFF),
+        (uint8_t)(gx1 >> 8), (uint8_t)(gx1 & 0xFF)
     };
-    esp_err_t err = display_send_cmd(ST7789_CASET);
-    if (err != ESP_OK) return err;
-    err = display_send_data(col_data, 4);
+    esp_err_t err = display_send_cmd_params(ST7789_CASET, col_data, 4);
     if (err != ESP_OK) return err;
 
     /* Row address set */
-    uint8_t row_data[4] = {
-        (uint8_t)(y0 >> 8), (uint8_t)(y0 & 0xFF),
-        (uint8_t)(y1 >> 8), (uint8_t)(y1 & 0xFF)
+    const uint8_t row_data[4] = {
+        (uint8_t)(gy0 >> 8), (uint8_t)(gy0 & 0xFF),
+        (uint8_t)(gy1 >> 8), (uint8_t)(gy1 & 0xFF)
     };
-    err = display_send_cmd(ST7789_RASET);
-    if (err != ESP_OK) return err;
-    err = display_send_data(row_data, 4);
+    err = display_send_cmd_params(ST7789_RASET, row_data, 4);
     if (err != ESP_OK) return err;
 
     /* Memory write */
@@ -269,20 +359,89 @@ static esp_err_t display_hw_init(void)
     /* Sleep out */
     err = display_send_cmd(ST7789_SLPOUT);
     if (err != ESP_OK) return err;
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(120));
 
     /* Color mode: 16-bit RGB565 */
-    err = display_send_cmd(ST7789_COLMOD);
-    if (err != ESP_OK) return err;
-    uint8_t colmod = 0x55;  /* 16-bit/pixel */
-    err = display_send_data(&colmod, 1);
+    static const uint8_t colmod[] = { 0x55 };  /* 16-bit/pixel */
+    err = display_send_cmd_params(ST7789_COLMOD, colmod, sizeof(colmod));
     if (err != ESP_OK) return err;
 
     /* Memory access control (landscape orientation) */
-    err = display_send_cmd(ST7789_MADCTL);
+    static const uint8_t madctl[] = { DISPLAY_MADCTL_LANDSCAPE };
+    err = display_send_cmd_params(ST7789_MADCTL, madctl, sizeof(madctl));
     if (err != ESP_OK) return err;
-    uint8_t madctl = 0x70;  /* MX + MV for landscape */
-    err = display_send_data(&madctl, 1);
+
+    /*
+     * Panel timing and power configuration.
+     *
+     * The ST7789V2 powers up with reset defaults that do not match this
+     * module's panel: the porch timing, gate/VCOM levels and the VRH/VDV
+     * charge-pump outputs are all wrong for it. Driving the glass with those
+     * defaults produces an unstable, noisy image regardless of what is written
+     * to GRAM, so this block must run before the display is enabled.
+     */
+
+    /* Porch control: back/front porch in normal, idle and partial modes */
+    static const uint8_t porctrl[] = { 0x0C, 0x0C, 0x00, 0x33, 0x33 };
+    err = display_send_cmd_params(ST7789_PORCTRL, porctrl, sizeof(porctrl));
+    if (err != ESP_OK) return err;
+
+    /* Gate control: VGH = 13.26 V, VGL = -10.43 V */
+    static const uint8_t gctrl[] = { 0x35 };
+    err = display_send_cmd_params(ST7789_GCTRL, gctrl, sizeof(gctrl));
+    if (err != ESP_OK) return err;
+
+    /* VCOM setting: 0.725 V */
+    static const uint8_t vcoms[] = { 0x19 };
+    err = display_send_cmd_params(ST7789_VCOMS, vcoms, sizeof(vcoms));
+    if (err != ESP_OK) return err;
+
+    /* LCM control: XOR of RGB/MX/MH settings expected by this panel */
+    static const uint8_t lcmctrl[] = { 0x2C };
+    err = display_send_cmd_params(ST7789_LCMCTRL, lcmctrl, sizeof(lcmctrl));
+    if (err != ESP_OK) return err;
+
+    /* Enable VDV and VRH command write */
+    static const uint8_t vdvvrhen[] = { 0x01 };
+    err = display_send_cmd_params(ST7789_VDVVRHEN, vdvvrhen, sizeof(vdvvrhen));
+    if (err != ESP_OK) return err;
+
+    /* VRH set: VAP = 4.45 V, VAN = -4.45 V */
+    static const uint8_t vrhs[] = { 0x12 };
+    err = display_send_cmd_params(ST7789_VRHS, vrhs, sizeof(vrhs));
+    if (err != ESP_OK) return err;
+
+    /* VDV set: 0 V */
+    static const uint8_t vdvs[] = { 0x20 };
+    err = display_send_cmd_params(ST7789_VDVS, vdvs, sizeof(vdvs));
+    if (err != ESP_OK) return err;
+
+    /* Frame rate control in normal mode: 60 Hz */
+    static const uint8_t frctrl2[] = { 0x0F };
+    err = display_send_cmd_params(ST7789_FRCTRL2, frctrl2, sizeof(frctrl2));
+    if (err != ESP_OK) return err;
+
+    /* Power control 1: AVDD = 6.8 V, AVCL = -4.8 V, VDDS = 2.3 V */
+    static const uint8_t pwctrl1[] = { 0xA4, 0xA1 };
+    err = display_send_cmd_params(ST7789_PWCTRL1, pwctrl1, sizeof(pwctrl1));
+    if (err != ESP_OK) return err;
+
+    /* Positive voltage gamma correction */
+    static const uint8_t pvgamctrl[] = {
+        0xD0, 0x04, 0x0D, 0x11, 0x13, 0x2B, 0x3F,
+        0x54, 0x4C, 0x18, 0x0D, 0x0B, 0x1F, 0x23
+    };
+    err = display_send_cmd_params(ST7789_PVGAMCTRL, pvgamctrl,
+                                  sizeof(pvgamctrl));
+    if (err != ESP_OK) return err;
+
+    /* Negative voltage gamma correction */
+    static const uint8_t nvgamctrl[] = {
+        0xD0, 0x04, 0x0C, 0x11, 0x13, 0x2C, 0x3F,
+        0x44, 0x51, 0x2F, 0x1F, 0x1F, 0x20, 0x23
+    };
+    err = display_send_cmd_params(ST7789_NVGAMCTRL, nvgamctrl,
+                                  sizeof(nvgamctrl));
     if (err != ESP_OK) return err;
 
     /* Inversion on (required for correct colors on ST7789) */
@@ -299,13 +458,38 @@ static esp_err_t display_hw_init(void)
     if (err != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    /* Turn on backlight */
-    gpio_set_level(DISPLAY_PIN_BL, 1);
+    /*
+     * The backlight stays off here on purpose. GRAM holds random data after
+     * power-up, so enabling it now would expose that noise. hal_display_init()
+     * turns it on after the first frame has been flushed.
+     */
 
     return ESP_OK;
 }
 
 #endif /* CONFIG_HAL_DISPLAY_MOCK */
+
+/* ========================================================================
+ * Pixel storage format
+ * ======================================================================== */
+
+/**
+ * @brief Convert an RGB565 value to the panel's on-the-wire byte order.
+ *
+ * The ST7789 consumes each pixel high byte first (RRRRRGGG then GGGBBBBB).
+ * hal_display_flush() streams the framebuffer straight to SPI with no
+ * per-pixel conversion, and the ESP32-S3 is little-endian, so storing a raw
+ * uint16_t would put the low byte on the wire first and scramble every colour
+ * channel. Pixels are therefore kept byte-swapped in the framebuffer, which
+ * makes a plain memory dump already valid panel data.
+ *
+ * Every write into the framebuffer must go through this helper. Nothing reads
+ * pixels back, so no inverse conversion is required.
+ */
+static inline uint16_t display_pixel(uint16_t rgb565)
+{
+    return (uint16_t)((rgb565 >> 8) | (rgb565 << 8));
+}
 
 /* ========================================================================
  * Public API Implementation
@@ -320,8 +504,22 @@ esp_err_t hal_display_init(void)
     display_ctx.module_state.status = HAL_STATUS_INITIALIZING;
     display_ctx.module_state.error_count = 0;
 
-    /* Allocate framebuffer */
+    /*
+     * Allocate framebuffer from internal DMA-capable RAM.
+     *
+     * hal_display_flush() hands this buffer straight to the SPI driver, so it
+     * has to satisfy the DMA requirements on its own. Requesting the caps
+     * explicitly keeps that true even if external PSRAM is enabled later:
+     * plain malloc() would then be free to place a ~64 KB buffer in PSRAM,
+     * which is not DMA-capable and would force the SPI driver into a
+     * per-flush temporary copy that can fail under memory pressure.
+     */
+#ifndef CONFIG_HAL_DISPLAY_MOCK
+    display_ctx.framebuffer = (uint16_t *)heap_caps_malloc(
+        DISPLAY_FB_SIZE, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+#else
     display_ctx.framebuffer = (uint16_t *)malloc(DISPLAY_FB_SIZE);
+#endif
     if (display_ctx.framebuffer == NULL) {
         ESP_LOGE(DISPLAY_TAG, "Failed to allocate framebuffer (%d bytes)",
                  DISPLAY_FB_SIZE);
@@ -345,6 +543,9 @@ esp_err_t hal_display_init(void)
     };
     gpio_config(&io_conf);
 
+    /* Keep the panel dark until the first frame is in GRAM */
+    gpio_set_level(DISPLAY_PIN_BL, 0);
+
     /* Configure SPI bus */
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = DISPLAY_PIN_MOSI,
@@ -352,7 +553,9 @@ esp_err_t hal_display_init(void)
         .sclk_io_num = DISPLAY_PIN_CLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = DISPLAY_FB_SIZE,
+        /* Framebuffer is flushed in DISPLAY_SPI_CHUNK_SIZE pieces, so the
+         * bus only needs DMA descriptors for one chunk at a time. */
+        .max_transfer_sz = DISPLAY_SPI_CHUNK_SIZE,
     };
 
     esp_err_t err = spi_bus_initialize(DISPLAY_SPI_HOST, &bus_cfg,
@@ -400,6 +603,30 @@ esp_err_t hal_display_init(void)
     display_ctx.initialized = true;
     display_ctx.module_state.status = HAL_STATUS_ACTIVE;
 
+#ifndef CONFIG_HAL_DISPLAY_MOCK
+    /*
+     * Push one black frame before switching the backlight on.
+     *
+     * GRAM contents are undefined after power-up, so without this the panel
+     * would light up showing random pixels until some caller happens to flush.
+     */
+    hal_display_clear(HAL_COLOR_BLACK);
+    esp_err_t flush_err = hal_display_flush();
+    if (flush_err != ESP_OK) {
+        ESP_LOGE(DISPLAY_TAG, "Initial flush failed: %s",
+                 esp_err_to_name(flush_err));
+        display_ctx.initialized = false;
+        display_ctx.module_state.status = HAL_STATUS_ERROR;
+        spi_bus_remove_device(display_ctx.spi_handle);
+        spi_bus_free(DISPLAY_SPI_HOST);
+        free(display_ctx.framebuffer);
+        display_ctx.framebuffer = NULL;
+        return flush_err;
+    }
+
+    gpio_set_level(DISPLAY_PIN_BL, 1);
+#endif
+
     ESP_LOGI(DISPLAY_TAG, "Display initialized (%dx%d, RGB565)",
              HAL_DISPLAY_WIDTH, HAL_DISPLAY_HEIGHT);
     return ESP_OK;
@@ -413,9 +640,10 @@ esp_err_t hal_display_clear(uint16_t color)
 
     uint16_t *fb = display_ctx.framebuffer;
     size_t pixel_count = HAL_DISPLAY_WIDTH * HAL_DISPLAY_HEIGHT;
+    const uint16_t raw = display_pixel(color);
 
     for (size_t i = 0; i < pixel_count; i++) {
-        fb[i] = color;
+        fb[i] = raw;
     }
 
     return ESP_OK;
@@ -432,7 +660,7 @@ esp_err_t hal_display_draw_pixel(uint16_t x, uint16_t y, uint16_t color)
         return ESP_OK;
     }
 
-    display_ctx.framebuffer[y * HAL_DISPLAY_WIDTH + x] = color;
+    display_ctx.framebuffer[y * HAL_DISPLAY_WIDTH + x] = display_pixel(color);
     return ESP_OK;
 }
 
@@ -456,25 +684,27 @@ esp_err_t hal_display_draw_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
         return ESP_OK;
     }
 
+    const uint16_t raw = display_pixel(color);
+
     if (filled) {
         for (uint16_t row = y; row < y_end; row++) {
             for (uint16_t col = x; col < x_end; col++) {
-                display_ctx.framebuffer[row * HAL_DISPLAY_WIDTH + col] = color;
+                display_ctx.framebuffer[row * HAL_DISPLAY_WIDTH + col] = raw;
             }
         }
     } else {
         /* Top and bottom horizontal lines */
         for (uint16_t col = x; col < x_end; col++) {
-            display_ctx.framebuffer[y * HAL_DISPLAY_WIDTH + col] = color;
+            display_ctx.framebuffer[y * HAL_DISPLAY_WIDTH + col] = raw;
             if (y_end - 1 < HAL_DISPLAY_HEIGHT) {
-                display_ctx.framebuffer[(y_end - 1) * HAL_DISPLAY_WIDTH + col] = color;
+                display_ctx.framebuffer[(y_end - 1) * HAL_DISPLAY_WIDTH + col] = raw;
             }
         }
         /* Left and right vertical lines */
         for (uint16_t row = y; row < y_end; row++) {
-            display_ctx.framebuffer[row * HAL_DISPLAY_WIDTH + x] = color;
+            display_ctx.framebuffer[row * HAL_DISPLAY_WIDTH + x] = raw;
             if (x_end - 1 < HAL_DISPLAY_WIDTH) {
-                display_ctx.framebuffer[row * HAL_DISPLAY_WIDTH + (x_end - 1)] = color;
+                display_ctx.framebuffer[row * HAL_DISPLAY_WIDTH + (x_end - 1)] = raw;
             }
         }
     }
@@ -495,6 +725,9 @@ esp_err_t hal_display_draw_text(uint16_t x, uint16_t y, const char *text,
 
     uint16_t cursor_x = x;
     uint16_t cursor_y = y;
+
+    const uint16_t raw_fg = display_pixel(color);
+    const uint16_t raw_bg = display_pixel(bg_color);
 
     while (*text != '\0') {
         char c = *text++;
@@ -521,7 +754,7 @@ esp_err_t hal_display_draw_text(uint16_t x, uint16_t y, const char *text,
                 uint16_t py = cursor_y + row;
                 if (px < HAL_DISPLAY_WIDTH && py < HAL_DISPLAY_HEIGHT) {
                     uint16_t pixel_color = (column_data & (1 << row))
-                                            ? color : bg_color;
+                                            ? raw_fg : raw_bg;
                     display_ctx.framebuffer[py * HAL_DISPLAY_WIDTH + px] =
                         pixel_color;
                 }
@@ -543,27 +776,47 @@ esp_err_t hal_display_flush(void)
 #ifndef CONFIG_HAL_DISPLAY_MOCK
     /* Set window to full screen */
     esp_err_t err = display_set_window(0, 0,
-                                        HAL_DISPLAY_WIDTH - 1,
-                                        HAL_DISPLAY_HEIGHT - 1);
+                                       HAL_DISPLAY_WIDTH - 1,
+                                       HAL_DISPLAY_HEIGHT - 1);
     if (err != ESP_OK) {
         display_ctx.module_state.error_count++;
         return err;
     }
 
-    /* Send framebuffer data */
+    /*
+     * Send framebuffer data in chunks that fit the SPI DMA length register.
+     *
+     * DC stays high for the whole burst; the ST7789 auto-increments its GRAM
+     * write pointer between transactions, so the single CASET/RASET/RAMWR
+     * setup above covers the entire frame.
+     */
     gpio_set_level(DISPLAY_PIN_DC, 1);
-    spi_transaction_t t = {
-        .length = DISPLAY_FB_SIZE * 8,
-        .tx_buffer = display_ctx.framebuffer,
-    };
-    err = spi_device_polling_transmit(display_ctx.spi_handle, &t);
-    if (err != ESP_OK) {
-        display_ctx.module_state.error_count++;
-        return err;
+
+    const uint8_t *src = (const uint8_t *)display_ctx.framebuffer;
+    size_t remaining = DISPLAY_FB_SIZE;
+
+    while (remaining > 0) {
+        const size_t chunk = (remaining > DISPLAY_SPI_CHUNK_SIZE)
+                               ? DISPLAY_SPI_CHUNK_SIZE : remaining;
+        spi_transaction_t t = {
+            .length = chunk * 8,
+            .tx_buffer = src,
+        };
+        err = spi_device_polling_transmit(display_ctx.spi_handle, &t);
+        if (err != ESP_OK) {
+            display_ctx.module_state.error_count++;
+            ESP_LOGE(DISPLAY_TAG, "Framebuffer flush failed: %s",
+                     esp_err_to_name(err));
+            return err;
+        }
+        src += chunk;
+        remaining -= chunk;
     }
-#endif
 
     return ESP_OK;
+#else
+    return ESP_OK;
+#endif
 }
 
 hal_status_t hal_display_get_status(void)

@@ -33,6 +33,9 @@ extern "C" {
 /** @brief SPI communication failure with LoRa module */
 #define ERR_HAL_LORA_SPI_FAIL   (ERR_HAL_BASE + 0x02)
 
+/** @brief LoRa module not found or not connected */
+#define ERR_HAL_LORA_NO_DEVICE  (ERR_HAL_BASE + 0x03)
+
 /* --- NRF24L01+ errors (0x1010 – 0x101F) --- */
 
 /** @brief NRF24 module did not respond within timeout */

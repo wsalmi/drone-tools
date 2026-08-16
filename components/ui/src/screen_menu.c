@@ -25,21 +25,23 @@ static screen_menu_state_t s_state = {0};
  * ======================================================================== */
 
 static const menu_item_t s_menu_items[SCREEN_MENU_ITEM_COUNT] = {
-    { .label = "Scanner",    .target_screen = (uint8_t)UI_SCREEN_SCANNER },
-    { .label = "Mapa",       .target_screen = (uint8_t)UI_SCREEN_MAP },
-    { .label = "Aeronaves",  .target_screen = (uint8_t)UI_SCREEN_AIRCRAFT_LIST },
-    { .label = "Spectrum",   .target_screen = (uint8_t)UI_SCREEN_SPECTRUM },
-    { .label = "Config",     .target_screen = (uint8_t)UI_SCREEN_SETTINGS },
-    { .label = "Log",        .target_screen = (uint8_t)UI_SCREEN_LOG },
+    { .label = "1. Scanner",         .target_screen = (uint8_t)UI_SCREEN_SCANNER },
+    { .label = "2. Mapa",            .target_screen = (uint8_t)UI_SCREEN_MAP },
+    { .label = "3. HUD Tatico",      .target_screen = (uint8_t)UI_SCREEN_HUD },
+    { .label = "4. Monitor RF",      .target_screen = (uint8_t)UI_SCREEN_SPECTRUM },
+    { .label = "5. Modos / Sensores",.target_screen = (uint8_t)UI_SCREEN_MODES },
+    { .label = "6. Configuracoes",   .target_screen = (uint8_t)UI_SCREEN_SETTINGS },
+    { .label = "7. Logs & Status",   .target_screen = (uint8_t)UI_SCREEN_LOG },
 };
 
 /* Menu item descriptions (secondary text) */
 static const char *s_menu_descriptions[SCREEN_MENU_ITEM_COUNT] = {
-    "Detectar aeronaves",
+    "Varredura e lista",
     "Vista 2D posicional",
-    "Lista detalhada",
-    "Analisador espectral",
-    "Configuracoes",
+    "Radar e telemetria",
+    "Canais WiFi, BLE, LoRa",
+    "Interruptores rapidos",
+    "Parametros do sistema",
     "Registros e KML"
 };
 
@@ -134,8 +136,31 @@ esp_err_t screen_menu_handle_key(uint8_t key)
             break;
 
         case UI_KEY_ENTER:
+        case UI_KEY_SPACE:
             /* Navigate to the target screen */
             ui_manager_navigate_to((ui_screen_t)s_menu_items[s_state.selected_item].target_screen);
+            break;
+
+        case UI_KEY_1:
+            ui_manager_navigate_to(UI_SCREEN_SCANNER);
+            break;
+        case UI_KEY_2:
+            ui_manager_navigate_to(UI_SCREEN_MAP);
+            break;
+        case UI_KEY_3:
+            ui_manager_navigate_to(UI_SCREEN_HUD);
+            break;
+        case UI_KEY_4:
+            ui_manager_navigate_to(UI_SCREEN_SPECTRUM);
+            break;
+        case UI_KEY_5:
+            ui_manager_navigate_to(UI_SCREEN_MODES);
+            break;
+        case UI_KEY_6:
+            ui_manager_navigate_to(UI_SCREEN_SETTINGS);
+            break;
+        case UI_KEY_7:
+            ui_manager_navigate_to(UI_SCREEN_LOG);
             break;
 
         default:

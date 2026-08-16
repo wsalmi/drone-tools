@@ -1,0 +1,27 @@
+# INVALID fixture: Finding missing mandatory fields (severity_rationale, owner, baseline)
+# Expected: validator FAILS — incomplete metadata cannot close findings
+# Validates: Property 2 — incomplete metadata blocks closure
+
+schema_version: 1
+findings:
+  - id: CQR-BUILD-002
+    title: "Missing include path"
+    category: build
+    severity: High
+    # MISSING: severity_rationale
+    status: CLOSED
+    # MISSING: owner
+    # MISSING: baseline
+    root_cause: "Path was wrong"
+    remediation:
+      strategy: "Fix path"
+      change_refs: ["commit:abc"]
+    regression:
+      test_ids: ["test_path"]
+      defective_result: "error"
+      remediated_result: "pass"
+    requirements: ["3.1"]
+    verification:
+      gates: {G2: "green"}
+      artifact_refs: []
+    accepted_risk: null

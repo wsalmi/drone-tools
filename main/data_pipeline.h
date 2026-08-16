@@ -51,7 +51,7 @@ extern "C" {
  * is a log_record_t. The Logger task drains this queue asynchronously
  * and writes to SD card or RAM buffer.
  */
-#define PIPELINE_LOGGER_QUEUE_SIZE      32
+#define PIPELINE_LOGGER_QUEUE_SIZE      12
 
 /* ========================================================================
  * Decoder→UI Event Group Bits

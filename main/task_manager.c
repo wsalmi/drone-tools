@@ -22,6 +22,17 @@
 #include "aircraft_registry.h"
 #include "alert_engine.h"
 #include "geolocation_service.h"
+#include "screen_menu.h"
+#include "screen_scanner.h"
+#include "screen_map.h"
+#include "screen_hud.h"
+#include "screen_modes.h"
+#include "screen_spectrum.h"
+#include "screen_settings.h"
+#include "screen_log.h"
+#include "hal_keyboard.h"
+#include "simulation_service.h"
+#include "web_server_service.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -121,15 +132,18 @@ esp_err_t task_manager_init(void)
         s_tm.stack_monitor_timer = NULL;
     }
 
-    /* Initialize Task Watchdog (may already be init'd by system) */
+    /* Initialize or reconfigure Task Watchdog */
     esp_task_wdt_config_t twdt_config = {
         .timeout_ms = CONFIG_ESP_TASK_WDT_TIMEOUT_S * 1000,
         .idle_core_mask = 0,
         .trigger_panic = true,
     };
-    err = esp_task_wdt_init(&twdt_config);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "TWDT init: %s (may be system-managed)", esp_err_to_name(err));
+    err = esp_task_wdt_reconfigure(&twdt_config);
+    if (err != ESP_OK) {
+        err = esp_task_wdt_init(&twdt_config);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(TAG, "TWDT init: %s", esp_err_to_name(err));
+        }
     }
 
     s_tm.initialized = true;
@@ -349,30 +363,126 @@ bool task_manager_is_running(void)
 static void task_ui_render(void *arg)
 {
     (void)arg;
-    ESP_LOGI(TAG, "UI Render task started");
+    ESP_LOGI(TAG, "[Core 1] UI Render task started (prio=%d, stack=%d, Free Heap=%u bytes)",
+             TASK_PRIO_UI_RENDER, TASK_STACK_UI_RENDER, (unsigned)esp_get_free_heap_size());
 
     /* Register with Task Watchdog */
     esp_task_wdt_add(NULL);
 
+    static uint32_t s_last_sim_tick_ms = 0;
+    static uint32_t s_frame_count = 0;
+    static ui_screen_t s_last_logged_screen = UI_SCREEN_COUNT;
+
     while (!s_tm.stop_requested) {
         esp_task_wdt_reset();
+        s_frame_count++;
 
-        /* Wait for UI events or timeout for periodic refresh */
+        /* Poll Keyboard Input */
+        ui_key_t key = UI_KEY_NONE;
+        if (hal_keyboard_read(&key) == ESP_OK && key != UI_KEY_NONE) {
+            ESP_LOGI(TAG, "[KEY] Received key event: %d on screen %d", (int)key, (int)ui_manager_get_current_screen());
+            ui_manager_handle_key(key);
+            switch (ui_manager_get_current_screen()) {
+                case UI_SCREEN_MAIN_MENU: screen_menu_handle_key(key); break;
+                case UI_SCREEN_MODES:     screen_modes_handle_key(key); break;
+                case UI_SCREEN_SETTINGS:  screen_settings_handle_key(key); break;
+                case UI_SCREEN_HUD:       screen_hud_handle_key(key); break;
+                default: break;
+            }
+        }
+
+        /* Wait for UI events or timeout for periodic refresh (~20fps) */
         uint32_t set_bits = 0;
         data_pipeline_wait_ui_events(PIPELINE_EVT_ALL, 50, &set_bits);
 
-        /* Update notification system */
+        /* Update simulation engine if enabled */
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
+        if (screen_modes_is_enabled(MODE_ITEM_SIMULATION)) {
+            simulation_service_set_enabled(true);
+            if (now_ms - s_last_sim_tick_ms >= 500) {
+                s_last_sim_tick_ms = now_ms;
+                simulation_service_tick();
+            }
+        } else {
+            simulation_service_set_enabled(false);
+        }
+
+        /* Manage Web Server lifecycle */
+        if (screen_modes_is_enabled(MODE_ITEM_WEBSERVER)) {
+            if (!web_server_service_is_active()) {
+                web_server_service_start();
+            }
+        } else {
+            if (web_server_service_is_active()) {
+                web_server_service_stop();
+            }
+        }
+
+        /* Update notification system */
         ui_manager_update_notifications(now_ms);
 
-        /* Render current screen content (handled by screen modules) */
+        /* Update module and aircraft counts in status bar */
+        aircraft_registry_t *reg = telemetry_decoder_get_registry();
+        if (reg != NULL) {
+            ui_manager_update_aircraft_count(registry_get_active_count(reg));
+        }
+
+        /* Log screen transition */
+        ui_screen_t curr_screen = ui_manager_get_current_screen();
+        if (curr_screen != s_last_logged_screen) {
+            ESP_LOGI(TAG, "[UI] Screen changed -> %d (frame=%lu, Free Heap=%u bytes)",
+                     (int)curr_screen, (unsigned long)s_frame_count, (unsigned)esp_get_free_heap_size());
+            s_last_logged_screen = curr_screen;
+        }
+
+        if (s_frame_count == 1) {
+            ESP_LOGI(TAG, "[UI] Rendering first frame successfully on display...");
+        }
+
+        /* Render status bar */
         ui_manager_render_status_bar();
+
+        /* Render current screen content */
+        switch (curr_screen) {
+            case UI_SCREEN_MAIN_MENU:
+                screen_menu_render();
+                break;
+            case UI_SCREEN_SCANNER:
+                screen_scanner_render(reg);
+                break;
+            case UI_SCREEN_MAP:
+                if (reg) {
+                    screen_map_render(reg);
+                } else {
+                    screen_map_render_empty();
+                }
+                break;
+            case UI_SCREEN_HUD:
+                screen_hud_render(reg);
+                break;
+            case UI_SCREEN_MODES:
+                screen_modes_render();
+                break;
+            case UI_SCREEN_SPECTRUM:
+                screen_spectrum_render();
+                break;
+            case UI_SCREEN_SETTINGS:
+                screen_settings_render();
+                break;
+            case UI_SCREEN_LOG:
+                screen_log_render();
+                break;
+            default:
+                break;
+        }
+
+        /* Render notification overlay (on top of screen content) */
         ui_manager_render_notification();
         hal_display_flush();
     }
 
     esp_task_wdt_delete(NULL);
-    ESP_LOGI(TAG, "UI Render task exiting");
+    ESP_LOGI(TAG, "[Core 1] UI Render task exiting");
     vTaskDelete(NULL);
 }
 

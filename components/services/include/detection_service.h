@@ -36,13 +36,13 @@ extern "C" {
  * ======================================================================== */
 
 /** @brief Maximum number of items in the detection queue */
-#define DETECTION_QUEUE_SIZE        64
+#define DETECTION_QUEUE_SIZE        12
 
 /** @brief Maximum raw payload size in bytes */
 #define DETECTION_MAX_PAYLOAD_LEN   256
 
 /** @brief Stack size for detection source tasks (bytes) */
-#define DETECTION_TASK_STACK_SIZE   4096
+#define DETECTION_TASK_STACK_SIZE   2560
 
 /** @brief Default priority for WiFi/BLE scanner task */
 #define DETECTION_TASK_PRIO_WIFI    5

@@ -54,7 +54,7 @@ extern "C" {
 #define HW_MGR_LORA_RETRY_INTERVAL_MS   2000
 
 /** @brief Stack size for the hardware manager FreeRTOS task (bytes) */
-#define HW_MGR_TASK_STACK_SIZE          4096
+#define HW_MGR_TASK_STACK_SIZE          2048
 
 /** @brief Priority of the hardware manager FreeRTOS task */
 #define HW_MGR_TASK_PRIORITY            5

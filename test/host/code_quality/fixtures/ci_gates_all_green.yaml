@@ -1,0 +1,5 @@
+# CI gate results: all mandatory jobs green → ACCEPTED
+host-test: green
+host-sanitizers: green
+static-analysis: green
+firmware-build: green

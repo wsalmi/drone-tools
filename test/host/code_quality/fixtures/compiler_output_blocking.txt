@@ -1,0 +1,3 @@
+components/services/src/remoteid_decoder.c:55:20: warning: use of uninitialized variable 'crc_calc' [-Wuninitialized]
+components/hw_hal/src/hal_sdr.c:120:8: warning: heap-use-after-free detected in sdr_transfer_release [-Wuse-after-free]
+main/data_pipeline.c:92:14: warning: array subscript 64 is above array bounds of 'uint8_t[32]' [-Warray-bounds]

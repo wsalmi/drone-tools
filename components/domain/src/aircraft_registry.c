@@ -177,6 +177,12 @@ void registry_update_status(aircraft_registry_t *reg, uint64_t current_time_ms)
     for (int i = 0; i < MAX_AIRCRAFT; i++) {
         if (reg->entries[i].slot_occupied &&
             reg->entries[i].status == AIRCRAFT_STATUS_ACTIVE) {
+            /* Guard against underflow if current_time_ms somehow precedes
+             * last_seen_utc_ms (clock inconsistency) — treat as "not yet
+             * timed out" rather than wrapping to a huge uint64_t value. */
+            if (current_time_ms < reg->entries[i].last_seen_utc_ms) {
+                continue;
+            }
             uint64_t elapsed = current_time_ms - reg->entries[i].last_seen_utc_ms;
             if (elapsed > AIRCRAFT_TIMEOUT_MS) {
                 reg->entries[i].status = AIRCRAFT_STATUS_OUT_OF_RANGE;

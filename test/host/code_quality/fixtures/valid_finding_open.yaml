@@ -1,0 +1,35 @@
+# Valid fixture: An OPEN finding with all mandatory fields.
+# Expected: validator PASSES
+
+schema_version: 1
+findings:
+  - id: CQR-REMOTEID-001
+    title: "Received CRC is not compared"
+    category: parsing
+    severity: High
+    severity_rationale:
+      impact: "acceptance of non-integrity telemetry"
+      probability: "untrusted external input"
+    status: OPEN
+    owner: "services/remoteid"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: "components/services/src/remoteid_decoder.c:142", excerpt_hash: "bbb222"}
+      reproduction: ["Run host PBT with corrupted CRC"]
+      observed_result: "CRC not checked; corrupt packet accepted"
+    current_evidence:
+      - {commit: "3f5b8b3", location: "components/services/src/remoteid_decoder.c:142"}
+    root_cause: null
+    remediation:
+      strategy: null
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: null
+      remediated_result: null
+    requirements: ["5.3", "5.4", "12.1"]
+    verification:
+      gates: {}
+      artifact_refs: []
+    accepted_risk: null

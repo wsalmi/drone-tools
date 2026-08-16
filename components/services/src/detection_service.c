@@ -198,7 +198,8 @@ static void ble_adv_callback(const uint8_t *adv_data, uint16_t len, int8_t rssi,
 static void task_wifi_ble_scanner(void *param)
 {
     (void)param;
-    ESP_LOGI(TAG, "WiFi/BLE scanner task started");
+    ESP_LOGI(TAG, "[Core 0] WiFi/BLE scanner task started (prio=%d, stack=%d, Free Heap=%u bytes)",
+             DETECTION_TASK_PRIO_WIFI, DETECTION_TASK_STACK_SIZE, (unsigned)esp_get_free_heap_size());
 
     while (!s_state.stop_requested) {
         /* WiFi phase */
@@ -251,7 +252,8 @@ static void task_wifi_ble_scanner(void *param)
 static void task_rf_monitor(void *param)
 {
     (void)param;
-    ESP_LOGI(TAG, "RF monitor task started");
+    ESP_LOGI(TAG, "[Core 0] RF monitor task started (prio=%d, stack=%d, Free Heap=%u bytes)",
+             DETECTION_TASK_PRIO_RF, DETECTION_TASK_STACK_SIZE, (unsigned)esp_get_free_heap_size());
 
     /* LoRa frequency plan for ELRS 900 MHz (subset) */
     static const uint32_t lora_freq_plan[] = {
@@ -327,8 +329,12 @@ static void task_rf_monitor(void *param)
                 if (err == ESP_OK && pkt.payload_len > 0) {
                     raw_detection_t det = {0};
                     det.source = DETECTION_SOURCE_NRF24;
-                    det.payload_len = (pkt.payload_len > DETECTION_MAX_PAYLOAD_LEN)
-                                      ? DETECTION_MAX_PAYLOAD_LEN : pkt.payload_len;
+                    /* No clamp needed here: pkt.payload_len is uint8_t
+                     * (max 255) and NRF24 payloads are at most 32 bytes,
+                     * both well under DETECTION_MAX_PAYLOAD_LEN (256). The
+                     * LoRa branch above still clamps because its
+                     * payload_len is uint16_t and can exceed the limit. */
+                    det.payload_len = pkt.payload_len;
                     memcpy(det.raw_payload, pkt.payload, det.payload_len);
                     det.rssi_dbm = pkt.rssi_level ? -60 : -90; /* NRF24 RPD is binary */
                     det.snr_db = 0;
@@ -365,7 +371,8 @@ static void task_rf_monitor(void *param)
 static void task_sdr_receiver(void *param)
 {
     (void)param;
-    ESP_LOGI(TAG, "SDR receiver task started");
+    ESP_LOGI(TAG, "[Core 0] SDR receiver task started (prio=%d, stack=%d, Free Heap=%u bytes)",
+             DETECTION_TASK_PRIO_SDR, DETECTION_TASK_STACK_SIZE, (unsigned)esp_get_free_heap_size());
 
     /* Allocate I/Q buffer */
     int8_t iq_buf[SDR_FFT_SIZE * 2];  /* I/Q interleaved */
@@ -466,7 +473,7 @@ esp_err_t detection_service_init(void)
     /* LoRa/NRF24 availability depends on HW Manager state */
     hw_manager_state_t hw_state = hw_manager_get_state();
     s_state.source_available[DETECTION_SOURCE_LORA] =
-        (hw_state == HW_STATE_LORA_ACTIVE || hw_state == HW_STATE_INITIALIZING);
+        (hw_state == HW_STATE_LORA_ACTIVE);
     s_state.source_available[DETECTION_SOURCE_NRF24] =
         (hw_state == HW_STATE_NRF24_ACTIVE);
 

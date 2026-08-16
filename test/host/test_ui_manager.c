@@ -436,7 +436,7 @@ void test_generic_screen_left_right_navigation(void)
     TEST_ASSERT_EQUAL(UI_SCREEN_SPECTRUM, ui_manager_get_current_screen());
 
     ui_manager_handle_key(UI_KEY_RIGHT);
-    TEST_ASSERT_EQUAL(UI_SCREEN_SETTINGS, ui_manager_get_current_screen());
+    TEST_ASSERT_EQUAL(UI_SCREEN_MODES, ui_manager_get_current_screen());
 
     ui_manager_handle_key(UI_KEY_LEFT);
     TEST_ASSERT_EQUAL(UI_SCREEN_SPECTRUM, ui_manager_get_current_screen());
@@ -445,6 +445,39 @@ void test_generic_screen_left_right_navigation(void)
 /* ========================================================================
  * Test Runner
  * ======================================================================== */
+
+void test_direct_numeric_shortcuts(void)
+{
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_1));
+    TEST_ASSERT_EQUAL(UI_SCREEN_SCANNER, ui_manager_get_current_screen());
+
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_2));
+    TEST_ASSERT_EQUAL(UI_SCREEN_MAP, ui_manager_get_current_screen());
+
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_3));
+    TEST_ASSERT_EQUAL(UI_SCREEN_HUD, ui_manager_get_current_screen());
+
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_4));
+    TEST_ASSERT_EQUAL(UI_SCREEN_SPECTRUM, ui_manager_get_current_screen());
+
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_5));
+    TEST_ASSERT_EQUAL(UI_SCREEN_MODES, ui_manager_get_current_screen());
+
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_6));
+    TEST_ASSERT_EQUAL(UI_SCREEN_SETTINGS, ui_manager_get_current_screen());
+
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_7));
+    TEST_ASSERT_EQUAL(UI_SCREEN_LOG, ui_manager_get_current_screen());
+
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_MENU));
+    TEST_ASSERT_EQUAL(UI_SCREEN_MAIN_MENU, ui_manager_get_current_screen());
+
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_TAB));
+    TEST_ASSERT_EQUAL(UI_SCREEN_AIRCRAFT_LIST, ui_manager_get_current_screen());
+
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_TAB));
+    TEST_ASSERT_EQUAL(UI_SCREEN_SCANNER, ui_manager_get_current_screen());
+}
 
 int main(void)
 {
@@ -504,6 +537,9 @@ int main(void)
 
     /* Generic Navigation */
     RUN_TEST(test_generic_screen_left_right_navigation);
+
+    /* Direct Numeric Shortcuts (1-7) & Tab/Menu */
+    RUN_TEST(test_direct_numeric_shortcuts);
 
     return UNITY_END();
 }

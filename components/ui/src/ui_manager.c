@@ -7,6 +7,12 @@
 
 #include "ui_manager.h"
 #include "screen_splash.h"
+#include "screen_menu.h"
+#include "screen_hud.h"
+#include "screen_modes.h"
+#include "screen_spectrum.h"
+#include "screen_settings.h"
+#include "screen_log.h"
 #include "hal_display.h"
 #include <string.h>
 #include <stdio.h>
@@ -111,28 +117,7 @@ static ui_screen_t prev_screen(ui_screen_t current)
 
 static void handle_key_main_menu(ui_key_t key)
 {
-    switch (key) {
-        case UI_KEY_UP:
-            s_ui_state.selected_aircraft_idx =
-                (s_ui_state.selected_aircraft_idx > 0)
-                    ? s_ui_state.selected_aircraft_idx - 1
-                    : (uint8_t)(UI_SCREEN_COUNT - 2); /* Wrap to last menu item (exclude MAIN_MENU itself) */
-            break;
-        case UI_KEY_DOWN:
-            s_ui_state.selected_aircraft_idx =
-                (s_ui_state.selected_aircraft_idx < (UI_SCREEN_COUNT - 2))
-                    ? s_ui_state.selected_aircraft_idx + 1
-                    : 0;
-            break;
-        case UI_KEY_ENTER: {
-            ui_screen_t target = (ui_screen_t)s_ui_state.selected_aircraft_idx;
-            s_ui_state.previous_screen = UI_SCREEN_MAIN_MENU;
-            s_ui_state.current_screen = target;
-            break;
-        }
-        default:
-            break;
-    }
+    screen_menu_handle_key((uint8_t)key);
 }
 
 static void handle_key_scanner(ui_key_t key)
@@ -206,14 +191,18 @@ static void handle_key_generic(ui_key_t key)
     switch (key) {
         case UI_KEY_BACK:
         case UI_KEY_MENU:
+        case UI_KEY_ENTER:
+        case UI_KEY_SPACE:
             s_ui_state.previous_screen = s_ui_state.current_screen;
             s_ui_state.current_screen = UI_SCREEN_MAIN_MENU;
             break;
         case UI_KEY_LEFT:
+        case UI_KEY_UP:
             s_ui_state.previous_screen = s_ui_state.current_screen;
             s_ui_state.current_screen = prev_screen(s_ui_state.current_screen);
             break;
         case UI_KEY_RIGHT:
+        case UI_KEY_DOWN:
             s_ui_state.previous_screen = s_ui_state.current_screen;
             s_ui_state.current_screen = next_screen(s_ui_state.current_screen);
             break;
@@ -229,6 +218,14 @@ static void handle_key_generic(ui_key_t key)
 esp_err_t ui_manager_init(void)
 {
     memset(&s_ui_state, 0, sizeof(ui_state_t));
+
+    /* Initialize all screen subsystems */
+    screen_menu_init();
+    screen_hud_init();
+    screen_modes_init();
+    screen_spectrum_init();
+    screen_settings_init();
+    screen_log_init();
 
     /* Show splash screen at boot */
     screen_splash_show(0);
@@ -263,6 +260,35 @@ esp_err_t ui_manager_handle_key(ui_key_t key)
         return ESP_OK;
     }
 
+    /* Global direct single-key shortcuts (1-7) */
+    switch (key) {
+        case UI_KEY_1:
+            return ui_manager_navigate_to(UI_SCREEN_SCANNER);
+        case UI_KEY_2:
+            return ui_manager_navigate_to(UI_SCREEN_MAP);
+        case UI_KEY_3:
+            return ui_manager_navigate_to(UI_SCREEN_HUD);
+        case UI_KEY_4:
+            return ui_manager_navigate_to(UI_SCREEN_SPECTRUM);
+        case UI_KEY_5:
+            return ui_manager_navigate_to(UI_SCREEN_MODES);
+        case UI_KEY_6:
+            return ui_manager_navigate_to(UI_SCREEN_SETTINGS);
+        case UI_KEY_7:
+            return ui_manager_navigate_to(UI_SCREEN_LOG);
+        case UI_KEY_MENU:
+            return ui_manager_navigate_to(UI_SCREEN_MAIN_MENU);
+        case UI_KEY_BACK:
+            if (s_ui_state.current_screen != UI_SCREEN_MAIN_MENU) {
+                return ui_manager_navigate_to(UI_SCREEN_MAIN_MENU);
+            }
+            break;
+        case UI_KEY_TAB:
+            return ui_manager_navigate_to(next_screen(s_ui_state.current_screen));
+        default:
+            break;
+    }
+
     switch (s_ui_state.current_screen) {
         case UI_SCREEN_MAIN_MENU:
             handle_key_main_menu(key);
@@ -273,6 +299,8 @@ esp_err_t ui_manager_handle_key(ui_key_t key)
         case UI_SCREEN_MAP:
             handle_key_map(key);
             break;
+        case UI_SCREEN_HUD:
+        case UI_SCREEN_MODES:
         case UI_SCREEN_AIRCRAFT_LIST:
         case UI_SCREEN_SPECTRUM:
         case UI_SCREEN_SETTINGS:

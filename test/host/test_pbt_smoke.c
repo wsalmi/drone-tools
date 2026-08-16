@@ -40,6 +40,7 @@ void test_pbt_smoke(void) {
         .prop1 = prop_always_true,
         .type_info = { &type_info },
         .trials = PBT_MIN_TRIALS,
+        .seed = (PBT_SEED != 0) ? (theft_seed)PBT_SEED : theft_seed_of_time(),
     };
 
     enum theft_run_res result = theft_run(&config);

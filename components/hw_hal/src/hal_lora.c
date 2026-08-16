@@ -18,6 +18,11 @@
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#if defined(ESP_PLATFORM)
+#include "esp_rom_sys.h"
+#else
+#define esp_rom_delay_us(us) ((void)0)
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -43,47 +48,47 @@ static const char *TAG = "hal_lora";
 #define SX1262_CMD_CALIBRATE            0x89
 #define SX1262_CMD_CALIBRATE_IMAGE      0x98
 #define SX1262_CMD_SET_PA_CONFIG        0x95
-#define SX1262_CMD_SET_RX_TX_FALLBACK   0x93
-
-/* DIO and IRQ */
+#define SX1262_CMD_SET_RX_TX_FALLBACK_MODE 0x93
+#define SX1262_CMD_WRITE_REGISTER       0x0D
+#define SX1262_CMD_READ_REGISTER        0x1D
+#define SX1262_CMD_WRITE_BUFFER         0x0E
+#define SX1262_CMD_READ_BUFFER          0x1E
 #define SX1262_CMD_SET_DIO_IRQ_PARAMS   0x08
-#define SX1262_CMD_SET_DIO2_AS_RF_SWITCH 0x9D
-#define SX1262_CMD_SET_DIO3_AS_TCXO     0x97
 #define SX1262_CMD_GET_IRQ_STATUS       0x12
-#define SX1262_CMD_CLR_IRQ_STATUS       0x02
-
-/* RF and Packet */
+#define SX1262_CMD_CLEAR_IRQ_STATUS     0x02
+#define SX1262_CMD_SET_DIO2_AS_RF_SWITCH 0x9D
+#define SX1262_CMD_SET_DIO3_AS_TCXO_CTRL 0x97
 #define SX1262_CMD_SET_RF_FREQUENCY     0x86
-#define SX1262_CMD_SET_PKT_TYPE         0x8A
-#define SX1262_CMD_GET_PKT_TYPE         0x11
+#define SX1262_CMD_SET_PACKET_TYPE      0x8A
+#define SX1262_CMD_GET_PACKET_TYPE      0x11
 #define SX1262_CMD_SET_TX_PARAMS        0x8E
 #define SX1262_CMD_SET_MODULATION_PARAMS 0x8B
-#define SX1262_CMD_SET_PKT_PARAMS       0x8C
+#define SX1262_CMD_SET_PACKET_PARAMS    0x8C
+#define SX1262_CMD_SET_CAD_PARAMS       0x88
 #define SX1262_CMD_SET_BUFFER_BASE_ADDR 0x8F
-
-/* Status and Buffer */
+#define SX1262_CMD_SET_LORA_SYMB_NUM_TIMEOUT 0xA0
 #define SX1262_CMD_GET_STATUS           0xC0
 #define SX1262_CMD_GET_RX_BUFFER_STATUS 0x13
-#define SX1262_CMD_GET_PKT_STATUS       0x14
+#define SX1262_CMD_GET_PACKET_STATUS    0x14
 #define SX1262_CMD_GET_RSSI_INST        0x15
-#define SX1262_CMD_READ_BUFFER          0x1E
-#define SX1262_CMD_WRITE_BUFFER         0x0E
-#define SX1262_CMD_READ_REGISTER        0x1D
-#define SX1262_CMD_WRITE_REGISTER       0x0D
-#define SX1262_CMD_SET_SYNC_WORD        0x00  /* via WriteRegister */
+#define SX1262_CMD_GET_STATS            0x10
+#define SX1262_CMD_RESET_STATS          0x00
+#define SX1262_CMD_GET_DEVICE_ERRORS    0x17
+#define SX1262_CMD_CLEAR_DEVICE_ERRORS  0x07
 
-/* Packet types */
-#define SX1262_PKT_TYPE_LORA            0x01
-
-/* Standby modes */
+/* SX1262 Standby modes */
 #define SX1262_STANDBY_RC               0x00
 #define SX1262_STANDBY_XOSC             0x01
 
-/* Regulator modes */
+/* SX1262 Packet types */
+#define SX1262_PKT_TYPE_GFSK            0x00
+#define SX1262_PKT_TYPE_LORA            0x01
+
+/* SX1262 Regulator modes */
 #define SX1262_REGULATOR_LDO            0x00
 #define SX1262_REGULATOR_DC_DC          0x01
 
-/* IRQ masks */
+/* SX1262 IRQ flags */
 #define SX1262_IRQ_TX_DONE              (1 << 0)
 #define SX1262_IRQ_RX_DONE              (1 << 1)
 #define SX1262_IRQ_PREAMBLE_DETECTED    (1 << 2)
@@ -92,30 +97,44 @@ static const char *TAG = "hal_lora";
 #define SX1262_IRQ_HEADER_ERR           (1 << 5)
 #define SX1262_IRQ_CRC_ERR              (1 << 6)
 #define SX1262_IRQ_CAD_DONE             (1 << 7)
-#define SX1262_IRQ_CAD_ACTIVITY_DETECTED (1 << 8)
+#define SX1262_IRQ_CAD_DETECTED         (1 << 8)
+#define SX1262_IRQ_TIMEOUT              (1 << 9)
 #define SX1262_IRQ_RX_TX_TIMEOUT        (1 << 9)
 #define SX1262_IRQ_ALL                  0x03FF
 
-/* RX continuous timeout (0xFFFFFF = no timeout) */
+/* Compatibility aliases */
+#define SX1262_CMD_SET_PKT_PARAMS       SX1262_CMD_SET_PACKET_PARAMS
+#define SX1262_CMD_SET_PKT_TYPE         SX1262_CMD_SET_PACKET_TYPE
+#define SX1262_CMD_GET_PKT_STATUS       SX1262_CMD_GET_PACKET_STATUS
+#define SX1262_CMD_CLR_IRQ_STATUS       SX1262_CMD_CLEAR_IRQ_STATUS
 #define SX1262_RX_CONTINUOUS            0xFFFFFF
 
+/* SX1262 LoRa Bandwidth options */
+#define SX1262_LORA_BW_7                0x00  /* 7.81 kHz */
+#define SX1262_LORA_BW_10               0x08  /* 10.42 kHz */
+#define SX1262_LORA_BW_15               0x01  /* 15.63 kHz */
+#define SX1262_LORA_BW_20               0x09  /* 20.83 kHz */
+#define SX1262_LORA_BW_31               0x02  /* 31.25 kHz */
+#define SX1262_LORA_BW_41               0x0A  /* 41.67 kHz */
+#define SX1262_LORA_BW_62               0x03  /* 62.50 kHz */
+#define SX1262_LORA_BW_125              0x04  /* 125.00 kHz */
+#define SX1262_LORA_BW_250              0x05  /* 250.00 kHz */
+#define SX1262_LORA_BW_500              0x06  /* 500.00 kHz */
+
+/* SX1262 LoRa Coding Rate options */
+#define SX1262_LORA_CR_4_5              0x01
+#define SX1262_LORA_CR_4_6              0x02
+#define SX1262_LORA_CR_4_7              0x03
+#define SX1262_LORA_CR_4_8              0x04
+
 /* ========================================================================
- * GPIO Pin Definitions (M5Stack Cardputer ADV EXT 14-pin connector)
+ * GPIO Pin Definitions for Cardputer Cap LoRa
  * ======================================================================== */
 
-/* SPI3 (VSPI) bus pins — shared with NRF24 and SD Card */
-#define PIN_SPI3_CLK        36
-#define PIN_SPI3_MOSI       35
-#define PIN_SPI3_MISO       37
-
-/* LoRa SX1262 specific pins */
-#define PIN_LORA_CS         10  /* Chip Select (active low) */
-#define PIN_LORA_RST        12  /* Reset (active low) */
-#define PIN_LORA_BUSY       13  /* Busy indicator (high = busy) */
-#define PIN_LORA_DIO1       14  /* DIO1 interrupt output */
-
-/* SPI clock speed for SX1262 (max 16 MHz per datasheet) */
-#define SX1262_SPI_CLOCK_HZ (10 * 1000 * 1000)  /* 10 MHz */
+/* LoRa SX1262 on SPI3_HOST shared bus (brucePins.conf matching) */
+#define PIN_LORA_CS         5   /* Chip Select (G5) */
+#define PIN_LORA_BUSY       4   /* IO2 / Busy (G4) */
+#define PIN_LORA_DIO1       3   /* IO0 / DIO1 (G3) */
 
 /* ========================================================================
  * Module Internal State
@@ -163,7 +182,6 @@ static esp_err_t sx1262_wait_busy(uint32_t timeout_ms)
     uint32_t start = get_time_ms();
     while (gpio_get_level(PIN_LORA_BUSY)) {
         if ((get_time_ms() - start) > timeout_ms) {
-            ESP_LOGE(TAG, "BUSY timeout after %lu ms", (unsigned long)timeout_ms);
             return ESP_ERR_TIMEOUT;
         }
         vTaskDelay(pdMS_TO_TICKS(1));
@@ -181,40 +199,23 @@ static esp_err_t sx1262_wait_busy(uint32_t timeout_ms)
 static esp_err_t sx1262_write_command(uint8_t opcode, const uint8_t *params,
                                       size_t param_len)
 {
-    esp_err_t ret;
+    if (s_ctx.spi_handle == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    sx1262_wait_busy(100);
 
-    ret = sx1262_wait_busy(100);
-    if (ret != ESP_OK) {
-        return ERR_HAL_LORA_TIMEOUT;
+    uint8_t tx[36];
+    tx[0] = opcode;
+    if (param_len > 0 && params != NULL) {
+        size_t copy_len = param_len > 32 ? 32 : param_len;
+        memcpy(&tx[1], params, copy_len);
     }
 
-    /* Build SPI transaction: opcode + params */
-    size_t total_len = 1 + param_len;
-    uint8_t tx_buf[16];  /* max command + params is well under 16 bytes */
-
-    if (total_len > sizeof(tx_buf)) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    tx_buf[0] = opcode;
-    if (params && param_len > 0) {
-        memcpy(&tx_buf[1], params, param_len);
-    }
-
-    spi_transaction_t trans = {
-        .length = total_len * 8,
-        .tx_buffer = tx_buf,
-        .rx_buffer = NULL,
+    spi_transaction_t t = {
+        .length = (1 + param_len) * 8,
+        .tx_buffer = tx,
     };
-
-    ret = spi_device_polling_transmit(s_ctx.spi_handle, &trans);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI write command 0x%02X failed: %s", opcode,
-                 esp_err_to_name(ret));
-        return ERR_HAL_LORA_SPI_FAIL;
-    }
-
-    return ESP_OK;
+    return spi_device_polling_transmit(s_ctx.spi_handle, &t);
 }
 
 /**
@@ -230,81 +231,64 @@ static esp_err_t sx1262_read_command(uint8_t opcode, const uint8_t *params,
                                      size_t param_len, uint8_t *result,
                                      size_t result_len)
 {
-    esp_err_t ret;
+    if (s_ctx.spi_handle == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    sx1262_wait_busy(100);
 
-    ret = sx1262_wait_busy(100);
-    if (ret != ESP_OK) {
-        return ERR_HAL_LORA_TIMEOUT;
+    uint8_t tx[36] = {0};
+    uint8_t rx[36] = {0};
+    tx[0] = opcode;
+    if (param_len > 0 && params != NULL) {
+        size_t copy_len = param_len > 30 ? 30 : param_len;
+        memcpy(&tx[1], params, copy_len);
     }
 
-    /* TX: opcode + params + 1 NOP (status) + result_len NOPs
-     * RX: skip opcode + params + 1 status byte, then read result_len bytes */
     size_t total_len = 1 + param_len + 1 + result_len;
-    uint8_t tx_buf[280];
-    uint8_t rx_buf[280];
-
-    if (total_len > sizeof(tx_buf)) {
-        return ESP_ERR_INVALID_SIZE;
+    if (opcode == SX1262_CMD_GET_STATUS) {
+        total_len = 2;
     }
 
-    memset(tx_buf, 0x00, total_len);
-    memset(rx_buf, 0x00, total_len);
-    tx_buf[0] = opcode;
-    if (params && param_len > 0) {
-        memcpy(&tx_buf[1], params, param_len);
-    }
-
-    spi_transaction_t trans = {
+    spi_transaction_t t = {
         .length = total_len * 8,
-        .tx_buffer = tx_buf,
-        .rx_buffer = rx_buf,
+        .tx_buffer = tx,
+        .rx_buffer = rx,
     };
 
-    ret = spi_device_polling_transmit(s_ctx.spi_handle, &trans);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI read command 0x%02X failed: %s", opcode,
-                 esp_err_to_name(ret));
-        return ERR_HAL_LORA_SPI_FAIL;
+    esp_err_t ret = spi_device_polling_transmit(s_ctx.spi_handle, &t);
+    if (ret == ESP_OK && result != NULL && result_len > 0) {
+        if (opcode == SX1262_CMD_GET_STATUS) {
+            result[0] = rx[1];
+        } else {
+            memcpy(result, &rx[1 + param_len + 1], result_len);
+        }
     }
 
-    /* Copy result (starts after opcode + params + 1 status NOP) */
-    size_t result_offset = 1 + param_len + 1;
-    memcpy(result, &rx_buf[result_offset], result_len);
-
-    return ESP_OK;
+    return ret;
 }
 
 /**
  * @brief Write to SX1262 buffer memory.
  */
-static esp_err_t sx1262_write_buffer(uint8_t offset, const uint8_t *data,
-                                     size_t len)
+static esp_err_t __attribute__((unused)) sx1262_write_buffer(uint8_t offset, const uint8_t *data,
+                                                             size_t len)
 {
-    esp_err_t ret = sx1262_wait_busy(100);
-    if (ret != ESP_OK) {
-        return ERR_HAL_LORA_TIMEOUT;
+    if (s_ctx.spi_handle == NULL) return ESP_ERR_INVALID_STATE;
+    sx1262_wait_busy(100);
+    if (len > 256) len = 256;
+
+    uint8_t tx[260];
+    tx[0] = SX1262_CMD_WRITE_BUFFER;
+    tx[1] = offset;
+    if (data && len > 0) {
+        memcpy(&tx[2], data, len);
     }
 
-    size_t total_len = 2 + len;  /* opcode + offset + data */
-    uint8_t *tx_buf = malloc(total_len);
-    if (!tx_buf) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    tx_buf[0] = SX1262_CMD_WRITE_BUFFER;
-    tx_buf[1] = offset;
-    memcpy(&tx_buf[2], data, len);
-
-    spi_transaction_t trans = {
-        .length = total_len * 8,
-        .tx_buffer = tx_buf,
-        .rx_buffer = NULL,
+    spi_transaction_t t = {
+        .length = (2 + len) * 8,
+        .tx_buffer = tx,
     };
-
-    ret = spi_device_polling_transmit(s_ctx.spi_handle, &trans);
-    free(tx_buf);
-
-    return (ret == ESP_OK) ? ESP_OK : ERR_HAL_LORA_SPI_FAIL;
+    return spi_device_polling_transmit(s_ctx.spi_handle, &t);
 }
 
 /**
@@ -312,44 +296,57 @@ static esp_err_t sx1262_write_buffer(uint8_t offset, const uint8_t *data,
  */
 static esp_err_t sx1262_read_buffer(uint8_t offset, uint8_t *data, size_t len)
 {
-    /* ReadBuffer command: 0x1E, offset, NOP, then read len bytes */
-    uint8_t params[2] = { offset, 0x00 };  /* offset + NOP status */
-    return sx1262_read_command(SX1262_CMD_READ_BUFFER, params, 2, data, len);
+    if (s_ctx.spi_handle == NULL) return ESP_ERR_INVALID_STATE;
+    sx1262_wait_busy(100);
+    if (len > 256) len = 256;
+
+    uint8_t tx[260] = {0};
+    uint8_t rx[260] = {0};
+    tx[0] = SX1262_CMD_READ_BUFFER;
+    tx[1] = offset;
+    tx[2] = 0x00; /* Status NOP */
+
+    spi_transaction_t t = {
+        .length = (3 + len) * 8,
+        .tx_buffer = tx,
+        .rx_buffer = rx,
+    };
+
+    esp_err_t ret = spi_device_polling_transmit(s_ctx.spi_handle, &t);
+    if (ret == ESP_OK && data != NULL) {
+        memcpy(data, &rx[3], len);
+    }
+
+    return ret;
 }
 
 /**
- * @brief Hardware reset the SX1262 via RST pin.
+ * @brief Hardware reset the SX1262.
  */
 static void sx1262_hw_reset(void)
 {
-    gpio_set_level(PIN_LORA_RST, 0);
+    uint8_t stdby = SX1262_STANDBY_RC;
+    sx1262_write_command(SX1262_CMD_SET_STANDBY, &stdby, 1);
     vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level(PIN_LORA_RST, 1);
-    vTaskDelay(pdMS_TO_TICKS(20));
 }
 
 /**
  * @brief Verify SX1262 communication by reading status.
- * @return ESP_OK if communication is working.
+ * @return ESP_OK if communication is working and device is present.
  */
 static esp_err_t sx1262_verify_communication(void)
 {
-    uint8_t status = 0;
-    esp_err_t ret = sx1262_read_command(SX1262_CMD_GET_STATUS, NULL, 0,
-                                        &status, 1);
-    if (ret != ESP_OK) {
-        return ret;
+    uint8_t status = 0xFF;
+    esp_err_t err = sx1262_read_command(SX1262_CMD_GET_STATUS, NULL, 0, &status, 1);
+    ESP_LOGI(TAG, "SX1262 GetStatus -> err=%d, status=0x%02X", err, status);
+
+    if (err == ESP_OK && status != 0x00 && status != 0xFF) {
+        uint8_t mode = (status >> 4) & 0x07;
+        ESP_LOGI(TAG, "SX1262 detected successfully! (status=0x%02X, mode=%d)", status, mode);
+        return ESP_OK;
     }
 
-    /* Check chip mode field (bits 6:4) — should not be 0x00 after reset */
-    uint8_t chip_mode = (status >> 4) & 0x07;
-    if (chip_mode == 0x00) {
-        ESP_LOGW(TAG, "Unexpected chip mode 0x00 in status");
-        /* Still consider communication OK if SPI worked */
-    }
-
-    ESP_LOGD(TAG, "SX1262 status: 0x%02X (mode=%d)", status, chip_mode);
-    return ESP_OK;
+    return ERR_HAL_LORA_NO_DEVICE;
 }
 
 /**
@@ -541,65 +538,31 @@ static esp_err_t sx1262_configure(const lora_config_t *config)
  */
 static esp_err_t sx1262_spi_init(void)
 {
-    esp_err_t ret;
-
-    /* Configure GPIO pins */
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << PIN_LORA_RST),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&io_conf);
-
-    io_conf.pin_bit_mask = (1ULL << PIN_LORA_BUSY);
-    io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    gpio_config(&io_conf);
-
-    io_conf.pin_bit_mask = (1ULL << PIN_LORA_DIO1);
-    io_conf.mode = GPIO_MODE_INPUT;
-    io_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
-    gpio_config(&io_conf);
-
-    /* Initialize SPI bus (if not already done by another device) */
-    spi_bus_config_t bus_cfg = {
-        .mosi_io_num = PIN_SPI3_MOSI,
-        .miso_io_num = PIN_SPI3_MISO,
-        .sclk_io_num = PIN_SPI3_CLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 256 + 8,
-    };
-
-    ret = spi_bus_initialize(SPI3_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
-    if (ret == ESP_OK) {
-        s_ctx.spi_bus_initialized = true;
-    } else if (ret == ESP_ERR_INVALID_STATE) {
-        /* Bus already initialized (shared with NRF24 or SD) — OK */
-        ESP_LOGI(TAG, "SPI3 bus already initialized (shared)");
-    } else {
-        ESP_LOGE(TAG, "SPI bus init failed: %s", esp_err_to_name(ret));
-        return ERR_HAL_LORA_SPI_FAIL;
+    if (s_ctx.spi_bus_initialized && s_ctx.spi_handle != NULL) {
+        return ESP_OK;
     }
 
-    /* Add SX1262 device to the SPI bus */
-    spi_device_interface_config_t dev_cfg = {
-        .clock_speed_hz = SX1262_SPI_CLOCK_HZ,
-        .mode = 0,                   /* CPOL=0, CPHA=0 */
+    gpio_reset_pin(PIN_LORA_BUSY);
+    gpio_set_direction(PIN_LORA_BUSY, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PIN_LORA_BUSY, GPIO_PULLDOWN_ONLY);
+
+    gpio_reset_pin(PIN_LORA_DIO1);
+    gpio_set_direction(PIN_LORA_DIO1, GPIO_MODE_INPUT);
+
+    spi_device_interface_config_t devcfg = {
+        .clock_speed_hz = 2000000, /* 2 MHz for SX1262 */
+        .mode = 0,                 /* SPI Mode 0 (CPOL=0, CPHA=0) */
         .spics_io_num = PIN_LORA_CS,
-        .queue_size = 1,
-        .pre_cb = NULL,
-        .post_cb = NULL,
+        .queue_size = 3,
     };
 
-    ret = spi_bus_add_device(SPI3_HOST, &dev_cfg, &s_ctx.spi_handle);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPI add device failed: %s", esp_err_to_name(ret));
-        return ERR_HAL_LORA_SPI_FAIL;
+    esp_err_t err = spi_bus_add_device(SPI3_HOST, &devcfg, &s_ctx.spi_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add LoRa device to SPI3_HOST: %s", esp_err_to_name(err));
+        return err;
     }
 
+    s_ctx.spi_bus_initialized = true;
     return ESP_OK;
 }
 
@@ -608,15 +571,11 @@ static esp_err_t sx1262_spi_init(void)
  */
 static void sx1262_spi_deinit(void)
 {
-    if (s_ctx.spi_handle) {
+    if (s_ctx.spi_handle != NULL) {
         spi_bus_remove_device(s_ctx.spi_handle);
         s_ctx.spi_handle = NULL;
     }
-
-    if (s_ctx.spi_bus_initialized) {
-        spi_bus_free(SPI3_HOST);
-        s_ctx.spi_bus_initialized = false;
-    }
+    s_ctx.spi_bus_initialized = false;
 }
 
 /**
@@ -705,6 +664,11 @@ esp_err_t hal_lora_init(const lora_config_t *config)
             }
             continue;
         }
+
+        /* Wake from reset into Standby RC mode */
+        uint8_t stdby_mode = SX1262_STANDBY_RC;
+        sx1262_write_command(SX1262_CMD_SET_STANDBY, &stdby_mode, 1);
+        vTaskDelay(pdMS_TO_TICKS(10));
 
         /* Verify SPI communication */
         ret = sx1262_verify_communication();
@@ -912,11 +876,6 @@ esp_err_t hal_lora_get_packet(lora_packet_t *packet, uint32_t timeout_ms)
         uint8_t clr[2] = { 0x03, 0xFF };
         sx1262_write_command(SX1262_CMD_CLR_IRQ_STATUS, clr, 2);
         return ESP_ERR_TIMEOUT;
-    }
-
-    /* Limit payload length */
-    if (payload_len > HAL_LORA_MAX_PAYLOAD_LEN) {
-        payload_len = HAL_LORA_MAX_PAYLOAD_LEN;
     }
 
     /* Read payload from buffer */

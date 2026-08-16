@@ -9,7 +9,8 @@ idf_component_register(
          "src/hal_display.c"
          "src/hal_sd.c"
          "src/hal_buzzer.c"
+         "src/hal_keyboard.c"
          "src/hw_manager.c"
     INCLUDE_DIRS "include"
-    REQUIRES common driver esp_timer esp_wifi bt usb fatfs
+    REQUIRES common driver esp_timer esp_wifi bt usb fatfs ui
 )

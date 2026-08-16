@@ -1,0 +1,40 @@
+# Valid fixture: A properly ACCEPTED_RISK finding (non-Critical) with all fields.
+# Expected: validator PASSES
+
+schema_version: 1
+findings:
+  - id: CQR-ENV-001
+    title: "Local ESP-IDF version differs from CI"
+    category: build
+    severity: Low
+    severity_rationale:
+      impact: "APIs may differ between v5.3 and v5.5"
+      probability: "builds succeed on both versions currently"
+    status: ACCEPTED_RISK
+    owner: "infrastructure"
+    baseline:
+      commit: "3f5b8b3ad6276bb04352596291d78b925ab699f5"
+      evidence:
+        - {location: ".github/workflows/build-and-release.yml:12", excerpt_hash: "aaa111"}
+      reproduction: ["Compare idf.py --version to CI container tag"]
+      observed_result: "v5.5.0 local vs v5.3 in CI"
+    current_evidence:
+      - {commit: "3f5b8b3", location: ".github/workflows/build-and-release.yml:12"}
+    root_cause: "PlatformIO installs latest; CI uses pinned Docker image"
+    remediation:
+      strategy: "Monitor for incompatibilities; upgrade CI when ready"
+      change_refs: []
+    regression:
+      test_ids: []
+      defective_result: null
+      remediated_result: null
+    requirements: ["1.1"]
+    verification:
+      gates: {}
+      artifact_refs: []
+    accepted_risk:
+      owner: "platform team"
+      justification: "Both versions build successfully; no API difference observed"
+      review_date: "2027-06-01"
+      review_condition: "When CI image is upgraded or API incompatibility found"
+      affected_capabilities: ["None currently"]

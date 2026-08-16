@@ -216,11 +216,18 @@ static esp_err_t handle_initializing(void)
     return ESP_FAIL;
 }
 
+/* Forward declaration: handle_switch_to_nrf24() reuses the LoRa recovery
+ * retry policy on rollback, but handle_lora_recovery() is defined later
+ * in this file. */
+static esp_err_t handle_lora_recovery(void);
+
 /**
  * @brief Handle NRF24 detection while LoRa is active.
  *
  * Performs hot-swap: deactivates LoRa, activates NRF24.
- * On NRF24 failure, performs rollback to LoRa (Req 10.3).
+ * On NRF24 failure, performs rollback to LoRa (Req 10.3), retrying up to
+ * the configured maximum (same policy as handle_lora_recovery) before
+ * giving up and entering the error state.
  */
 static esp_err_t handle_switch_to_nrf24(void)
 {
@@ -239,21 +246,22 @@ static esp_err_t handle_switch_to_nrf24(void)
         return ESP_OK;
     }
 
-    /* Step 3: Rollback — re-initialize LoRa (Req 10.3) */
+    /* Step 3: Rollback — re-initialize LoRa with retry (Req 10.3).
+     * Reuses the same retry/backoff policy as handle_lora_recovery so a
+     * transient failure during rollback doesn't strand the system in
+     * HW_STATE_ERROR after a single attempt. transition_to() already
+     * notifies on every state change, so no extra notification is needed
+     * here. */
     ESP_LOGW(TAG, "NRF24 activation failed, rolling back to LoRa");
     s_ctx.nrf24_status = HAL_STATUS_ERROR;
 
-    err = try_init_lora();
+    err = handle_lora_recovery();
     if (err == ESP_OK) {
-        transition_to(HW_STATE_LORA_ACTIVE);
         ESP_LOGI(TAG, "Rollback to LoRa successful");
     } else {
-        /* Rollback failed — enter error state */
         ESP_LOGE(TAG, "Rollback to LoRa also failed");
-        transition_to(HW_STATE_ERROR);
     }
 
-    notify_status_change();
     return err;
 }
 

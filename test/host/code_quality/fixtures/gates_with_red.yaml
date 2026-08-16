@@ -1,0 +1,8 @@
+# Gate results fixture: G3 (Security) is red
+G0: green
+G1: green
+G2: green
+G3: red
+G4: green
+G5: green
+G6: green

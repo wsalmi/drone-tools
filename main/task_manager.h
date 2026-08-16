@@ -49,18 +49,18 @@ extern "C" {
 #define TASK_PRIO_LOGGER        2   /**< Logger — lowest priority */
 
 /* --- Core 1 task stack sizes (bytes) --- */
-#define TASK_STACK_UI_RENDER    8192    /**< UI needs more memory for rendering */
-#define TASK_STACK_DECODER      8192    /**< Decoder needs memory for protocol parsing */
-#define TASK_STACK_GPS_READER   4096    /**< GPS NMEA parsing is lightweight */
-#define TASK_STACK_LOGGER       4096    /**< Logger writes to SD, moderate stack */
+#define TASK_STACK_UI_RENDER    4096    /**< UI render task */
+#define TASK_STACK_DECODER      3072    /**< Decoder pipeline */
+#define TASK_STACK_GPS_READER   2560    /**< GPS position dispatcher */
+#define TASK_STACK_LOGGER       4096    /**< Logger writes to SD/SPIFFS */
 
 /* --- Core 0 task config (for reference, managed by Detection Service) --- */
 #define TASK_PRIO_WIFI_BLE      5
 #define TASK_PRIO_RF_MONITOR    6
 #define TASK_PRIO_SDR_RECEIVER  4
-#define TASK_STACK_WIFI_BLE     4096
-#define TASK_STACK_RF_MONITOR   4096
-#define TASK_STACK_SDR_RECEIVER 4096
+#define TASK_STACK_WIFI_BLE     3072
+#define TASK_STACK_RF_MONITOR   2048
+#define TASK_STACK_SDR_RECEIVER 2048
 
 /* --- Stack monitoring --- */
 #define TASK_STACK_MONITOR_INTERVAL_MS  10000   /**< Check stack every 10 seconds */

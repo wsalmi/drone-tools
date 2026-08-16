@@ -44,14 +44,12 @@ static void build_wifi_basic_id_frame(uint8_t *frame, uint16_t *len,
     size_t id_len = strlen(uas_id);
     if (id_len > 20) id_len = 20;
     memcpy(&frame[offset + 2], uas_id, id_len);
+    /* Compute CRC-8 over protected region (first 24 bytes of message) */
+    frame[offset + REMOTEID_CRC_OFFSET] = remoteid_crc8(&frame[offset], REMOTEID_CRC_PROTECTED_LEN);
     offset += REMOTEID_MSG_SIZE;
 
     *len = offset;
 }
-
-/**
- * @brief Build a WiFi frame with Basic ID + Location messages.
- */
 static void build_wifi_with_location(uint8_t *frame, uint16_t *len,
                                       const char *uas_id,
                                       double lat, double lon,
@@ -74,6 +72,7 @@ static void build_wifi_with_location(uint8_t *frame, uint16_t *len,
     size_t id_len = strlen(uas_id);
     if (id_len > 20) id_len = 20;
     memcpy(&frame[offset + 2], uas_id, id_len);
+    frame[offset + REMOTEID_CRC_OFFSET] = remoteid_crc8(&frame[offset], REMOTEID_CRC_PROTECTED_LEN);
     offset += REMOTEID_MSG_SIZE;
 
     /* Location message (25 bytes) */
@@ -115,6 +114,7 @@ static void build_wifi_with_location(uint8_t *frame, uint16_t *len,
     frame[offset + 15] = (uint8_t)(alt_raw & 0xFF);
     frame[offset + 16] = (uint8_t)((alt_raw >> 8) & 0xFF);
 
+    frame[offset + REMOTEID_CRC_OFFSET] = remoteid_crc8(&frame[offset], REMOTEID_CRC_PROTECTED_LEN);
     offset += REMOTEID_MSG_SIZE;
     *len = offset;
 }
@@ -144,6 +144,7 @@ static void build_ble_basic_id(uint8_t *adv, uint16_t *len,
     size_t id_len = strlen(uas_id);
     if (id_len > 20) id_len = 20;
     memcpy(&adv[offset + 2], uas_id, id_len);
+    adv[offset + REMOTEID_CRC_OFFSET] = remoteid_crc8(&adv[offset], REMOTEID_CRC_PROTECTED_LEN);
     offset += REMOTEID_MSG_SIZE;
 
     *len = offset;
@@ -172,6 +173,7 @@ static void build_wifi_with_operator(uint8_t *frame, uint16_t *len,
     size_t id_len = strlen(uas_id);
     if (id_len > 20) id_len = 20;
     memcpy(&frame[offset + 2], uas_id, id_len);
+    frame[offset + REMOTEID_CRC_OFFSET] = remoteid_crc8(&frame[offset], REMOTEID_CRC_PROTECTED_LEN);
     offset += REMOTEID_MSG_SIZE;
 
     /* System message (25 bytes) */
@@ -192,6 +194,7 @@ static void build_wifi_with_operator(uint8_t *frame, uint16_t *len,
     frame[offset + 8] = (uint8_t)((op_lon_raw >> 16) & 0xFF);
     frame[offset + 9] = (uint8_t)((op_lon_raw >> 24) & 0xFF);
 
+    frame[offset + REMOTEID_CRC_OFFSET] = remoteid_crc8(&frame[offset], REMOTEID_CRC_PROTECTED_LEN);
     offset += REMOTEID_MSG_SIZE;
     *len = offset;
 }
@@ -412,6 +415,7 @@ void test_wifi_invalid_msg_type_no_basic_id_returns_error(void)
     /* Message with invalid type (0x0F = msg pack, but 0x0E is invalid) */
     memset(&frame[offset], 0, REMOTEID_MSG_SIZE);
     frame[offset] = (0x0E << 4); /* Invalid type 14 */
+    frame[offset + REMOTEID_CRC_OFFSET] = remoteid_crc8(&frame[offset], REMOTEID_CRC_PROTECTED_LEN);
     offset += REMOTEID_MSG_SIZE;
 
     remoteid_data_t data;
@@ -663,7 +667,7 @@ void test_validate_wifi_invalid_msg_type(void)
     build_wifi_basic_id_frame(frame, &len, "TEST-001");
     /* Set invalid message type in first message (byte at offset 5) */
     frame[5] = (0x0E << 4); /* Type 14 is invalid */
-    TEST_ASSERT_EQUAL(ERR_DECODE_CRC_FAIL, remoteid_validate_frame(frame, len, false));
+    TEST_ASSERT_EQUAL(ERR_DECODE_UNKNOWN_FMT, remoteid_validate_frame(frame, len, false));
 }
 
 /* --- Unified remoteid_decode --- */

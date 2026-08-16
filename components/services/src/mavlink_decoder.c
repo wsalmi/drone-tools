@@ -422,6 +422,14 @@ esp_err_t mavlink_decode(const uint8_t *data, uint16_t len, decoded_telemetry_t 
         return err;
     }
 
+    /* Reject unsupported message IDs as "unknown format" rather than
+     * letting validate_crc() fail for lack of a crc_extra value, which
+     * would otherwise be misreported as a CRC/integrity failure. */
+    uint8_t crc_extra;
+    if (!get_crc_extra(info.msg_id, &crc_extra)) {
+        return ERR_DECODE_UNKNOWN_FMT;
+    }
+
     /* Validate CRC */
     if (!validate_crc(data, &info)) {
         return ERR_DECODE_CRC_FAIL;

@@ -11,6 +11,8 @@ idf_component_register(
           "src/alert_engine.c"
           "src/spectrum_analyzer.c"
           "src/data_logger.c"
+          "src/simulation_service.c"
+          "src/web_server_service.c"
     INCLUDE_DIRS "include"
-    REQUIRES common hw_hal domain
+    REQUIRES common hw_hal domain esp_http_server esp_wifi
 )

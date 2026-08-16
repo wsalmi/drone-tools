@@ -1,0 +1,112 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default (no sanitizers)",
+      "description": "Standard host test build without sanitizers",
+      "binaryDir": "${sourceDir}/../../build/host",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "asan",
+      "displayName": "ASan + UBSan",
+      "description": "AddressSanitizer + UndefinedBehaviorSanitizer for memory safety",
+      "binaryDir": "${sourceDir}/../../build/host_asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SANITIZER": "address"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "TSan",
+      "description": "ThreadSanitizer for data race detection. Full support on Linux/GCC; limited on macOS/AppleClang.",
+      "binaryDir": "${sourceDir}/../../build/host_tsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SANITIZER": "thread"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "sanitizer_probe"
+        }
+      }
+    },
+    {
+      "name": "asan-probes",
+      "configurePreset": "asan",
+      "description": "Run only sanitizer probe fixtures (expected to fail = WILL_FAIL tests)",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "label": "sanitizer_probe"
+        }
+      }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "sanitizer_probe"
+        }
+      }
+    },
+    {
+      "name": "tsan-probes",
+      "configurePreset": "tsan",
+      "description": "Run only TSan probe fixtures (expected to fail = WILL_FAIL tests)",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "label": "sanitizer_probe"
+        }
+      }
+    }
+  ]
+}

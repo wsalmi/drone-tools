@@ -33,7 +33,7 @@
 
 /* SD card SPI pins (shared SPI3/VSPI bus with RF modules) */
 #define SD_SPI_HOST             SPI3_HOST
-#define SD_PIN_CS               4
+#define SD_PIN_CS               12
 #define SD_MAX_OPEN_FILES       5
 #define SD_ALLOC_UNIT_SIZE      (16 * 1024)
 
