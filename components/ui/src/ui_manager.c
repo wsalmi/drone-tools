@@ -61,11 +61,11 @@ static const char *s_screen_labels[] = {
 
 /* Short labels for module status bar */
 static const char *s_module_labels[] = {
-    "LR",   /* LoRa */
-    "NR",   /* NRF24 */
-    "SD",   /* SDR (using SD to save space, context makes it clear) */
+    "WF",   /* WiFi Sniffer */
+    "BL",   /* BLE Scanner */
+    "RF",   /* RF Status */
     "GP",   /* GPS */
-    "uSD"   /* SD card */
+    "SD"    /* SD card */
 };
 
 /* ========================================================================

@@ -28,21 +28,21 @@ static const menu_item_t s_menu_items[SCREEN_MENU_ITEM_COUNT] = {
     { .label = "1. Scanner",         .target_screen = (uint8_t)UI_SCREEN_SCANNER },
     { .label = "2. Mapa",            .target_screen = (uint8_t)UI_SCREEN_MAP },
     { .label = "3. HUD Tatico",      .target_screen = (uint8_t)UI_SCREEN_HUD },
-    { .label = "4. Monitor RF",      .target_screen = (uint8_t)UI_SCREEN_SPECTRUM },
-    { .label = "5. Modos / Sensores",.target_screen = (uint8_t)UI_SCREEN_MODES },
-    { .label = "6. Configuracoes",   .target_screen = (uint8_t)UI_SCREEN_SETTINGS },
-    { .label = "7. Logs & Status",   .target_screen = (uint8_t)UI_SCREEN_LOG },
+    { .label = "4. Modos & Web",     .target_screen = (uint8_t)UI_SCREEN_MODES },
+    { .label = "5. Configuracoes",   .target_screen = (uint8_t)UI_SCREEN_SETTINGS },
+    { .label = "6. Logs SD",         .target_screen = (uint8_t)UI_SCREEN_LOG },
+    { .label = "7. Status do Sistema",.target_screen = (uint8_t)UI_SCREEN_SPECTRUM },
 };
 
 /* Menu item descriptions (secondary text) */
 static const char *s_menu_descriptions[SCREEN_MENU_ITEM_COUNT] = {
-    "Varredura e lista",
+    "Drones & RID (WiFi/BLE)",
     "Vista 2D posicional",
-    "Radar e telemetria",
-    "Canais WiFi, BLE, LoRa",
-    "Interruptores rapidos",
-    "Parametros do sistema",
-    "Registros e KML"
+    "Telemetria e Piloto",
+    "Simulacao e Web Server",
+    "Parametros e Alarmes",
+    "Registros em /sdcard",
+    "CPU, RAM e Sensores"
 };
 
 /* ========================================================================

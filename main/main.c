@@ -211,7 +211,7 @@ static void init_phase_buses(void)
     ESP_LOGI(TAG, "=== Phase 1: Hardware Buses ===");
     init_show_header("-- Buses --");
 
-    /* Initialize shared SPI3 bus (VSPI) for RF modules and SD card */
+    /* Initialize SPI3 bus (VSPI) dedicated for SD card */
     spi_bus_config_t spi3_cfg = {
         .mosi_io_num = 14,
         .miso_io_num = 39,
@@ -222,29 +222,25 @@ static void init_phase_buses(void)
     };
     esp_err_t spi_err = spi_bus_initialize(SPI3_HOST, &spi3_cfg, SPI_DMA_CH_AUTO);
     if (spi_err == ESP_OK || spi_err == ESP_ERR_INVALID_STATE) {
-        ESP_LOGI(TAG, "SPI3 (RF+SD): Shared bus initialized");
+        ESP_LOGI(TAG, "SPI3 (SD Card): Bus initialized");
     } else {
         ESP_LOGW(TAG, "SPI3 bus initialize returned: %s", esp_err_to_name(spi_err));
     }
 
     ESP_LOGI(TAG, "SPI2 (Display): configured by hal_display_init");
     ESP_LOGI(TAG, "UART1 (GPS): configured by hal_gps_init");
-    ESP_LOGI(TAG, "USB OTG (SDR): configured by hal_sdr_init");
 
     init_show_status("Buses", "READY", false);
 }
 
 /**
  * @brief Phase 2: Initialize HAL modules with display feedback.
- *
- * Each module gets up to INIT_MODULE_TIMEOUT_MS to initialize.
- * Failures are non-fatal — the system operates in degraded mode.
  */
 static void init_phase_hal(void)
 {
     esp_err_t err;
 
-    ESP_LOGI(TAG, "=== Phase 2: HAL Modules ===");
+    ESP_LOGI(TAG, "=== Phase 2: HAL Modules (WiFi + BLE Focus) ===");
     init_show_header("-- HAL Init --");
 
     /* --- Display (must be first — we need it for status output) --- */
@@ -256,56 +252,25 @@ static void init_phase_hal(void)
         hal_display_draw_text(2, s_init_display_y, "Drone Telemetry Monitor",
                               HAL_COLOR_WHITE, HAL_COLOR_BLACK);
         s_init_display_y += 12;
-        hal_display_draw_text(2, s_init_display_y, "Initializing...",
-                              HAL_COLOR_YELLOW, HAL_COLOR_BLACK);
+        hal_display_draw_text(2, s_init_display_y, "Mode: WiFi + BLE Sniffer",
+                              HAL_COLOR_GREEN, HAL_COLOR_BLACK);
         s_init_display_y += 12;
         hal_display_flush();
     } else {
         ESP_LOGE(TAG, "Display init FAILED: %s", esp_err_to_name(err));
-        /* Cannot show status on display, continue with logging only */
     }
 
-    /* --- GPS (UART1, 9600 baud) --- */
+    /* --- GPS (UART1, 115200 baud) --- */
     err = hal_gps_init(GPS_BAUD_RATE);
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "GPS: OK (waiting for fix)");
-        init_show_status("GPS ATGM336H", "OK", false);
+        init_show_status("GPS (115.2k)", "OK", false);
     } else {
         ESP_LOGW(TAG, "GPS init FAILED: %s", esp_err_to_name(err));
-        init_show_status("GPS ATGM336H", "FAIL", true);
+        init_show_status("GPS", "FAIL", true);
     }
 
-    /*
-     * --- RF Modules via Hardware Manager (LoRa/NRF24 hot-swap) ---
-     *
-     * Must run before hal_sd_init(): the SD card shares SPI3 with the RF
-     * modules and only adds its device to that bus — it never creates it.
-     * hw_manager_init() creates the SPI3 bus synchronously inside its
-     * initial probe (hal_lora_init()/hal_nrf24_init()) before returning, so
-     * by the time hal_sd_init() runs afterward the bus already exists.
-     * Calling hal_sd_init() first means SD always fails with ESP_ERR_NOT_FOUND
-     * even when the card is physically present.
-     */
-    hw_manager_config_t hw_cfg;
-    hw_manager_get_default_config(&hw_cfg);
-    err = hw_manager_init(&hw_cfg);
-    if (err == ESP_OK) {
-        hw_manager_state_t hw_state = hw_manager_get_state();
-        const char *state_str;
-        switch (hw_state) {
-            case HW_STATE_LORA_ACTIVE:   state_str = "LoRa"; break;
-            case HW_STATE_NRF24_ACTIVE:  state_str = "NRF24"; break;
-            case HW_STATE_ERROR:         state_str = "ERR"; break;
-            default:                     state_str = "INIT"; break;
-        }
-        ESP_LOGI(TAG, "HW Manager: OK (active: %s)", state_str);
-        init_show_status("RF (HW Mgr)", state_str, hw_state == HW_STATE_ERROR);
-    } else {
-        ESP_LOGW(TAG, "HW Manager init FAILED: %s", esp_err_to_name(err));
-        init_show_status("RF (HW Mgr)", "FAIL", true);
-    }
-
-    /* --- SD Card (shares SPI3 bus created by HW Manager above) --- */
+    /* --- SD Card (SPI3 bus) --- */
     err = hal_sd_init();
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "SD Card: OK");
@@ -313,22 +278,6 @@ static void init_phase_hal(void)
     } else {
         ESP_LOGW(TAG, "SD Card: ABSENT/FAIL (%s)", esp_err_to_name(err));
         init_show_status("SD Card", "FAIL", true);
-    }
-
-    /* --- RTL-SDR (USB Host OTG) --- */
-    sdr_config_t sdr_cfg = {
-        .center_freq_hz = 915000000U,  /* Default: 915 MHz */
-        .sample_rate_hz = 2400000U,    /* 2.4 MHz */
-        .gain_index = 14,              /* ~20 dB */
-        .agc_enabled = false
-    };
-    err = hal_sdr_init(&sdr_cfg);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "RTL-SDR: OK");
-        init_show_status("RTL-SDR", "OK", false);
-    } else {
-        ESP_LOGW(TAG, "RTL-SDR: NOT PRESENT (%s)", esp_err_to_name(err));
-        init_show_status("RTL-SDR", "SKIP", true);
     }
 
     /* --- WiFi Scanner --- */
@@ -539,20 +488,8 @@ static void init_phase_services(void)
         init_show_status("Data Logger", "FAIL", true);
     }
 
-    /* Spectrum Analyzer (depends on SDR HAL + config) */
-    if (hal_sdr_get_status() != HAL_STATUS_INACTIVE) {
-        err = spectrum_analyzer_init(&g_config.spectrum);
-        if (err == ESP_OK) {
-            ESP_LOGI(TAG, "Spectrum Analyzer: OK");
-            init_show_status("Spectrum", "OK", false);
-        } else {
-            ESP_LOGW(TAG, "Spectrum Analyzer: %s", esp_err_to_name(err));
-            init_show_status("Spectrum", "FAIL", true);
-        }
-    } else {
-        ESP_LOGI(TAG, "Spectrum Analyzer: SKIP (no SDR)");
-        init_show_status("Spectrum", "NOSD", true);
-    }
+    /* Spectrum Analyzer disabled for WiFi+BLE mode */
+    ESP_LOGI(TAG, "Spectrum Analyzer: SKIP (WiFi+BLE mode)");
 
     /* Alert Engine (depends on buzzer + geolocation + config) */
     err = alert_engine_init(&g_config.alert);
@@ -597,11 +534,11 @@ static void init_phase_ui(void)
                  (unsigned)esp_get_free_heap_size());
         init_show_status("UI Manager", "OK", false);
 
-        /* Set initial module status based on current HAL state */
+        /* Set initial module status based on WiFi and BLE scanner state */
         ui_manager_update_module_status(
-            hal_lora_get_status(),
-            hal_nrf24_get_status(),
-            hal_sdr_get_status(),
+            hal_wifi_scanner_get_status(),
+            hal_ble_scanner_get_status(),
+            HAL_STATUS_INACTIVE,
             hal_gps_get_status(),
             hal_sd_is_mounted() ? HAL_STATUS_ACTIVE : HAL_STATUS_INACTIVE);
 
@@ -645,7 +582,7 @@ static void init_phase_tasks(void)
     }
 
     /* Start Detection Service (creates Core 0 detection tasks) */
-    ESP_LOGI(TAG, "[BOOT] Launching Core 0 Detection Tasks (WiFi/BLE, RF Monitor, SDR)...");
+    ESP_LOGI(TAG, "[BOOT] Launching Core 0 Detection Tasks (WiFi/BLE Sniffers)...");
     err = detection_service_start();
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "[BOOT] Detection tasks started successfully on Core 0");
@@ -691,6 +628,7 @@ void app_main(void)
     ESP_LOGI(TAG, "==================================================");
     ESP_LOGI(TAG, "  DRONE TELEMETRY MONITOR — BOOT SEQUENCE");
     ESP_LOGI(TAG, "  Platform: M5Stack Cardputer ADV (ESP32-S3)");
+    ESP_LOGI(TAG, "  Target Mode: Pure WiFi + BLE Drone Detection");
     ESP_LOGI(TAG, "  Initial Free Heap: %u bytes", (unsigned)esp_get_free_heap_size());
     ESP_LOGI(TAG, "==================================================");
 
@@ -713,10 +651,9 @@ void app_main(void)
     ESP_LOGI(TAG, "  Free Heap: %u bytes (Min Ever: %u bytes)",
              (unsigned)esp_get_free_heap_size(),
              (unsigned)esp_get_minimum_free_heap_size());
-    ESP_LOGI(TAG, "  Active modules: LoRa=%d NRF24=%d SDR=%d GPS=%d SD=%d",
-             hal_lora_get_status() == HAL_STATUS_ACTIVE,
-             hal_nrf24_get_status() == HAL_STATUS_ACTIVE,
-             hal_sdr_get_status() == HAL_STATUS_ACTIVE,
+    ESP_LOGI(TAG, "  Active modules: WiFi=%d BLE=%d GPS=%d SD=%d",
+             hal_wifi_scanner_get_status() == HAL_STATUS_ACTIVE,
+             hal_ble_scanner_get_status() == HAL_STATUS_ACTIVE,
              hal_gps_get_status() == HAL_STATUS_ACTIVE,
              hal_sd_is_mounted());
     ESP_LOGI(TAG, "  Signatures loaded: %u", signatures_get_count());

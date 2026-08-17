@@ -249,7 +249,7 @@ static void task_wifi_ble_scanner(void *param)
  * The Hardware Manager handles the mutual exclusion; this task checks
  * the current state to decide which module to read from.
  */
-static void task_rf_monitor(void *param)
+static void __attribute__((unused)) task_rf_monitor(void *param)
 {
     (void)param;
     ESP_LOGI(TAG, "[Core 0] RF monitor task started (prio=%d, stack=%d, Free Heap=%u bytes)",
@@ -368,7 +368,7 @@ static void task_rf_monitor(void *param)
  * when signal energy is present. The raw I/Q samples are trimmed to fit
  * within raw_detection_t payload for downstream processing.
  */
-static void task_sdr_receiver(void *param)
+static void __attribute__((unused)) task_sdr_receiver(void *param)
 {
     (void)param;
     ESP_LOGI(TAG, "[Core 0] SDR receiver task started (prio=%d, stack=%d, Free Heap=%u bytes)",
@@ -470,24 +470,15 @@ esp_err_t detection_service_init(void)
     s_state.source_available[DETECTION_SOURCE_BLE_RID] =
         (hal_ble_scanner_get_status() != HAL_STATUS_ERROR);
 
-    /* LoRa/NRF24 availability depends on HW Manager state */
-    hw_manager_state_t hw_state = hw_manager_get_state();
-    s_state.source_available[DETECTION_SOURCE_LORA] =
-        (hw_state == HW_STATE_LORA_ACTIVE);
-    s_state.source_available[DETECTION_SOURCE_NRF24] =
-        (hw_state == HW_STATE_NRF24_ACTIVE);
-
-    s_state.source_available[DETECTION_SOURCE_SDR] =
-        (hal_sdr_get_status() != HAL_STATUS_ERROR &&
-         hal_sdr_get_status() != HAL_STATUS_INACTIVE);
+    /* LoRa/NRF24/SDR disabled for simplified WiFi+BLE firmware */
+    s_state.source_available[DETECTION_SOURCE_LORA] = false;
+    s_state.source_available[DETECTION_SOURCE_NRF24] = false;
+    s_state.source_available[DETECTION_SOURCE_SDR] = false;
 
     /* Log module availability */
-    ESP_LOGI(TAG, "Detection sources: WiFi=%d BLE=%d LoRa=%d NRF24=%d SDR=%d",
+    ESP_LOGI(TAG, "Detection sources: WiFi=%d BLE=%d (LoRa=0 NRF24=0 SDR=0)",
              s_state.source_available[DETECTION_SOURCE_WIFI_RID],
-             s_state.source_available[DETECTION_SOURCE_BLE_RID],
-             s_state.source_available[DETECTION_SOURCE_LORA],
-             s_state.source_available[DETECTION_SOURCE_NRF24],
-             s_state.source_available[DETECTION_SOURCE_SDR]);
+             s_state.source_available[DETECTION_SOURCE_BLE_RID]);
 
     s_state.initialized = true;
     s_state.started = false;
@@ -496,7 +487,7 @@ esp_err_t detection_service_init(void)
     s_state.task_rf = NULL;
     s_state.task_sdr = NULL;
 
-    ESP_LOGI(TAG, "Detection service initialized");
+    ESP_LOGI(TAG, "Detection service initialized (WiFi + BLE only)");
     return ESP_OK;
 }
 
@@ -534,54 +525,8 @@ esp_err_t detection_service_start(void)
         ESP_LOGI(TAG, "WiFi/BLE scanner task created on Core 0");
     }
 
-    /* Start RF monitor task if LoRa or NRF24 is available */
-    if (s_state.source_available[DETECTION_SOURCE_LORA] ||
-        s_state.source_available[DETECTION_SOURCE_NRF24]) {
-
-        ret = xTaskCreatePinnedToCore(
-            task_rf_monitor,
-            "det_rf_mon",
-            DETECTION_TASK_STACK_SIZE,
-            NULL,
-            DETECTION_TASK_PRIO_RF,
-            &s_state.task_rf,
-            0  /* Core 0 (PRO_CPU) */
-        );
-        if (ret != pdPASS) {
-            ESP_LOGE(TAG, "Failed to create RF monitor task");
-            /* Clean up already created tasks */
-            if (s_state.task_wifi_ble != NULL) {
-                s_state.stop_requested = true;
-                vTaskDelay(pdMS_TO_TICKS(100));
-            }
-            return ESP_ERR_NO_MEM;
-        }
-        ESP_LOGI(TAG, "RF monitor task created on Core 0");
-    }
-
-    /* Start SDR receiver task if SDR is available */
-    if (s_state.source_available[DETECTION_SOURCE_SDR]) {
-
-        ret = xTaskCreatePinnedToCore(
-            task_sdr_receiver,
-            "det_sdr",
-            DETECTION_TASK_STACK_SIZE,
-            NULL,
-            DETECTION_TASK_PRIO_SDR,
-            &s_state.task_sdr,
-            0  /* Core 0 (PRO_CPU) */
-        );
-        if (ret != pdPASS) {
-            ESP_LOGE(TAG, "Failed to create SDR task");
-            s_state.stop_requested = true;
-            vTaskDelay(pdMS_TO_TICKS(100));
-            return ESP_ERR_NO_MEM;
-        }
-        ESP_LOGI(TAG, "SDR receiver task created on Core 0");
-    }
-
     s_state.started = true;
-    ESP_LOGI(TAG, "Detection service started");
+    ESP_LOGI(TAG, "Detection service started (WiFi + BLE mode)");
     return ESP_OK;
 }
 
