@@ -42,7 +42,7 @@ extern "C" {
 #define DETECTION_MAX_PAYLOAD_LEN   256
 
 /** @brief Stack size for detection source tasks (bytes) */
-#define DETECTION_TASK_STACK_SIZE   2560
+#define DETECTION_TASK_STACK_SIZE   3584
 
 /** @brief Default priority for WiFi/BLE scanner task */
 #define DETECTION_TASK_PRIO_WIFI    5

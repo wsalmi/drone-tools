@@ -9,6 +9,7 @@
 
 #if defined(ESP_PLATFORM) && !defined(CONFIG_HAL_KEYBOARD_MOCK)
 #include "driver/gpio.h"
+#include "driver/usb_serial_jtag.h"
 #include "esp_timer.h"
 #include <unistd.h>
 #include <fcntl.h>
@@ -99,6 +100,28 @@ static ui_key_t map_char_to_key(char c)
     }
 }
 
+static const char *map_key_to_name(ui_key_t k)
+{
+    switch (k) {
+        case UI_KEY_UP:    return "UP/W";
+        case UI_KEY_DOWN:  return "DOWN/S";
+        case UI_KEY_LEFT:  return "LEFT/A";
+        case UI_KEY_RIGHT: return "RIGHT/D";
+        case UI_KEY_ENTER: return "ENTER/SPACE";
+        case UI_KEY_BACK:  return "ESC/DEL";
+        case UI_KEY_MENU:  return "MENU/M";
+        case UI_KEY_TAB:   return "TAB";
+        case UI_KEY_1:     return "1";
+        case UI_KEY_2:     return "2";
+        case UI_KEY_3:     return "3";
+        case UI_KEY_4:     return "4";
+        case UI_KEY_5:     return "5";
+        case UI_KEY_6:     return "6";
+        case UI_KEY_7:     return "7";
+        default:           return "OTHER";
+    }
+}
+
 esp_err_t hal_keyboard_read(ui_key_t *key)
 {
     if (key == NULL) {
@@ -118,7 +141,7 @@ esp_err_t hal_keyboard_read(ui_key_t *key)
     }
 
 #if defined(ESP_PLATFORM) && !defined(CONFIG_HAL_KEYBOARD_MOCK)
-    /* 1. Check serial console input (non-blocking) */
+    /* 1. Check serial console input (STDIN non-blocking) */
     char c = 0;
     int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
     if (flags != -1) {
@@ -137,69 +160,100 @@ esp_err_t hal_keyboard_read(ui_key_t *key)
         /* Row 0 (A0=0,A1=0,A2=0): Esc, 1, 2, 3, 4, 5, 6 */
         { UI_KEY_BACK,  UI_KEY_1,     UI_KEY_2,     UI_KEY_3,     UI_KEY_4,     UI_KEY_5,     UI_KEY_6 },
         /* Row 1 (A0=1,A1=0,A2=0): Tab, Q, W, E, R, T, Y */
-        { UI_KEY_TAB,   UI_KEY_NONE,  UI_KEY_UP,    UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE },
+        { UI_KEY_TAB,   UI_KEY_BACK,  UI_KEY_UP,    UI_KEY_UP,    UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE },
         /* Row 2 (A0=0,A1=1,A2=0): Fn, Shift, A, S, D, F, G */
-        { UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_LEFT,  UI_KEY_DOWN,  UI_KEY_RIGHT, UI_KEY_NONE,  UI_KEY_NONE },
+        { UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_LEFT,  UI_KEY_DOWN,  UI_KEY_RIGHT, UI_KEY_ENTER, UI_KEY_NONE },
         /* Row 3 (A0=1,A1=1,A2=0): Ctrl, Opt, Alt, Z, X, C, V */
-        { UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE },
-        /* Row 4 (A0=0,A1=0,A2=1): Space, B, N, M, ,, ., / */
-        { UI_KEY_ENTER, UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_MENU,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE },
+        { UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_DOWN,  UI_KEY_DOWN,  UI_KEY_DOWN,  UI_KEY_DOWN },
+        /* Row 4 (A0=0,A1=0,A2=1): Space, B, N, M, ,, ., / (Arrows: , is Left, . is Down, / is Right) */
+        { UI_KEY_ENTER, UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_MENU,  UI_KEY_LEFT,  UI_KEY_DOWN,  UI_KEY_RIGHT },
         /* Row 5 (A0=1,A1=0,A2=1): 7, 8, 9, 0, Del, _, = */
-        { UI_KEY_7,     UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_BACK,  UI_KEY_NONE,  UI_KEY_NONE },
+        { UI_KEY_7,     UI_KEY_1,     UI_KEY_2,     UI_KEY_3,     UI_KEY_BACK,  UI_KEY_BACK,  UI_KEY_ENTER },
         /* Row 6 (A0=0,A1=1,A2=1): U, I, O, P, [, ], \ */
-        { UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE },
-        /* Row 7 (A0=1,A1=1,A2=1): H, J, K, L, ;, ', Enter */
-        { UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_ENTER }
+        { UI_KEY_NONE,  UI_KEY_UP,    UI_KEY_NONE,  UI_KEY_NONE,  UI_KEY_UP,    UI_KEY_DOWN,  UI_KEY_ENTER },
+        /* Row 7 (A0=1,A1=1,A2=1): H, J, K, L, ;, ', Enter (Arrows: ; is Up, J is Down, K is Up, L is Right, H is Left) */
+        { UI_KEY_LEFT,  UI_KEY_DOWN,  UI_KEY_UP,    UI_KEY_RIGHT, UI_KEY_UP,    UI_KEY_ENTER, UI_KEY_ENTER }
     };
 
-    /* Scan matrix rows 0 to 7 */
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
+
+    /* 1. First scan all 8 rows and build the full 8x7 matrix table */
+    uint8_t matrix_raw[8][COL_COUNT] = {0};
+    uint8_t col_low_count[COL_COUNT] = {0};
+
     for (int r = 0; r < 8; r++) {
-        /* Set 3 address lines (8, 9, 11) to select row r */
         gpio_set_level(s_row_pins[0], (r & 0x01) ? 1 : 0);
         gpio_set_level(s_row_pins[1], (r & 0x02) ? 1 : 0);
         gpio_set_level(s_row_pins[2], (r & 0x04) ? 1 : 0);
-        esp_rom_delay_us(5);
+        esp_rom_delay_us(15);
 
-        for (int c_idx = 0; c_idx < COL_COUNT; c_idx++) {
-            if (gpio_get_level(s_col_pins[c_idx]) == 0) {
-                ui_key_t k = s_matrix_keys[r][c_idx];
-                if (k != UI_KEY_NONE) {
-                    /* Verify this pin goes HIGH on an alternate row to reject UART/bus signals */
-                    int test_row = (r + 1) % 8;
-                    gpio_set_level(s_row_pins[0], (test_row & 0x01) ? 1 : 0);
-                    gpio_set_level(s_row_pins[1], (test_row & 0x02) ? 1 : 0);
-                    gpio_set_level(s_row_pins[2], (test_row & 0x04) ? 1 : 0);
-                    esp_rom_delay_us(5);
-                    int test_level = gpio_get_level(s_col_pins[c_idx]);
-
-                    /* Restore row r */
-                    gpio_set_level(s_row_pins[0], (r & 0x01) ? 1 : 0);
-                    gpio_set_level(s_row_pins[1], (r & 0x02) ? 1 : 0);
-                    gpio_set_level(s_row_pins[2], (r & 0x04) ? 1 : 0);
-                    esp_rom_delay_us(5);
-
-                    if (test_level == 1) {
-                        /* Real physical key press! */
-                        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000ULL);
-                        if (now - s_last_press_time_ms > 180) {
-                            s_last_press_time_ms = now;
-                            *key = k;
-                            /* Restore row pins to inactive HIGH before returning */
-                            gpio_set_level(s_row_pins[0], 1);
-                            gpio_set_level(s_row_pins[1], 1);
-                            gpio_set_level(s_row_pins[2], 1);
-                            return ESP_OK;
-                        }
-                    }
-                }
+        for (int c = 0; c < COL_COUNT; c++) {
+            int lvl = gpio_get_level(s_col_pins[c]);
+            matrix_raw[r][c] = (uint8_t)lvl;
+            if (lvl == 0) {
+                col_low_count[c]++;
             }
         }
     }
 
-    /* Restore all row lines to HIGH (1, 1, 1 = Row 7 / idle) */
+    /* Restore all row pins to HIGH */
     gpio_set_level(s_row_pins[0], 1);
     gpio_set_level(s_row_pins[1], 1);
     gpio_set_level(s_row_pins[2], 1);
+
+    /* 2. Identify pressed key with instant edge-detection and typematic repeat */
+    static ui_key_t s_active_held_key = UI_KEY_NONE;
+    static uint32_t s_key_press_start_ms = 0;
+    static uint32_t s_last_repeat_time_ms = 0;
+
+    ui_key_t detected_key = UI_KEY_NONE;
+    int detected_row = -1;
+    int detected_col = -1;
+
+    for (int c = 0; c < COL_COUNT; c++) {
+        /* Reject lines held low across >= 3 rows (e.g. SX1262 BUSY on GPIO 4, GPS UART) */
+        if (col_low_count[c] > 0 && col_low_count[c] <= 2) {
+            for (int r = 0; r < 8; r++) {
+                if (matrix_raw[r][c] == 0) {
+                    ui_key_t k = s_matrix_keys[r][c];
+                    if (k != UI_KEY_NONE) {
+                        detected_key = k;
+                        detected_row = r;
+                        detected_col = c;
+                        break;
+                    }
+                }
+            }
+            if (detected_key != UI_KEY_NONE) {
+                break;
+            }
+        }
+    }
+
+    if (detected_key != UI_KEY_NONE) {
+        if (detected_key != s_active_held_key) {
+            /* New key press -> INSTANT trigger */
+            s_active_held_key = detected_key;
+            s_key_press_start_ms = now;
+            s_last_repeat_time_ms = now;
+            *key = detected_key;
+            ESP_LOGI(TAG, "[KEY PRESS] Key '%s' (ID %d) on Row %d, Col %d",
+                     map_key_to_name(detected_key), (int)detected_key, detected_row, detected_col);
+            return ESP_OK;
+        } else {
+            /* Held key -> Typematic repeat (250ms initial delay, then 80ms repeat) */
+            if ((now - s_key_press_start_ms >= 250) && (now - s_last_repeat_time_ms >= 80)) {
+                s_last_repeat_time_ms = now;
+                *key = detected_key;
+                return ESP_OK;
+            }
+        }
+    } else {
+        /* No key pressed -> reset state immediately */
+        s_active_held_key = UI_KEY_NONE;
+        s_key_press_start_ms = 0;
+        s_last_repeat_time_ms = 0;
+    }
 #endif
 
     return ESP_OK;

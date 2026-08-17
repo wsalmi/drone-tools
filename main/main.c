@@ -85,8 +85,8 @@ static const char *TAG = "main";
 /** @brief Maximum time to wait for any module initialization (ms) */
 #define INIT_MODULE_TIMEOUT_MS      500
 
-/** @brief GPS UART baud rate (ATGM336H default) */
-#define GPS_BAUD_RATE               9600
+/** @brief GPS UART baud rate (ATGM336H default on Cardputer ADV) */
+#define GPS_BAUD_RATE               115200
 
 /** @brief Path to config.json on SD card */
 #define CONFIG_JSON_PATH            "/sdcard/config.json"
@@ -641,7 +641,6 @@ void app_main(void)
     init_phase_domain();
     init_phase_services();
     init_phase_ui();
-    init_phase_tasks();
 
     /* Calculate total initialization time */
     uint32_t elapsed_ms = (uint32_t)(esp_timer_get_time() / 1000ULL) - start_time_ms;
@@ -666,16 +665,19 @@ void app_main(void)
     snprintf(complete_msg, sizeof(complete_msg), "Ready! (%lums)", (unsigned long)elapsed_ms);
     init_show_status(complete_msg, "", false);
 
-    ESP_LOGI(TAG, "[BOOT] Waiting 1000ms before switching to UI Main Menu...");
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "[BOOT] Showing ready splash on screen...");
+    vTaskDelay(pdMS_TO_TICKS(500));
 
     /* Clear boot text and switch to main menu */
-    ESP_LOGI(TAG, "[BOOT] Clearing boot text and navigating to Main Menu (UI_SCREEN_MAIN_MENU)");
+    ESP_LOGI(TAG, "[BOOT] Navigating to Main Menu (UI_SCREEN_MAIN_MENU)");
     hal_display_clear(HAL_COLOR_BLACK);
     hal_display_flush();
 
-    /* Navigate to main menu — UI task will handle rendering from here */
+    /* Navigate to main menu */
     ui_manager_navigate_to(UI_SCREEN_MAIN_MENU);
+
+    /* Now launch FreeRTOS tasks (task_ui_render takes ownership of display) */
+    init_phase_tasks();
 
     /* app_main returns — FreeRTOS tasks continue running */
     ESP_LOGI(TAG, "[BOOT] app_main() completed. System running autonomously via FreeRTOS tasks.");

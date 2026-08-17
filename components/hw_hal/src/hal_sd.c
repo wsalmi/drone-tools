@@ -34,8 +34,8 @@
 /* SD card SPI pins (shared SPI3/VSPI bus with RF modules) */
 #define SD_SPI_HOST             SPI3_HOST
 #define SD_PIN_CS               12
-#define SD_MAX_OPEN_FILES       5
-#define SD_ALLOC_UNIT_SIZE      (16 * 1024)
+#define SD_MAX_OPEN_FILES       2
+#define SD_ALLOC_UNIT_SIZE      (4 * 1024)
 
 /* ========================================================================
  * Internal state
@@ -94,6 +94,12 @@ esp_err_t hal_sd_init(void)
     sd_ctx.module_state.error_count = 0;
 
 #ifndef CONFIG_HAL_SD_MOCK
+    /* Configure pull-ups for SPI lines and CS pin */
+    gpio_set_pull_mode(SD_PIN_CS, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(GPIO_NUM_39, GPIO_PULLUP_ONLY); /* MISO */
+    gpio_set_pull_mode(GPIO_NUM_14, GPIO_PULLUP_ONLY); /* MOSI */
+    gpio_set_pull_mode(GPIO_NUM_40, GPIO_PULLUP_ONLY); /* SCK */
+
     /* Mount configuration */
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false,
@@ -101,15 +107,14 @@ esp_err_t hal_sd_init(void)
         .allocation_unit_size = SD_ALLOC_UNIT_SIZE,
     };
 
-    /* SPI bus configuration for SD slot
-     * Note: SPI3 bus is already initialized by RF modules.
-     * We only add the SD device to the existing bus. */
+    /* SPI device configuration for SD slot */
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = SD_PIN_CS;
     slot_config.host_id = SD_SPI_HOST;
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SD_SPI_HOST;
+    host.max_freq_khz = SDMMC_FREQ_DEFAULT; /* 20 MHz default */
 
     esp_err_t err = esp_vfs_fat_sdspi_mount(
         HAL_SD_MOUNT_POINT,
@@ -118,6 +123,19 @@ esp_err_t hal_sd_init(void)
         &mount_config,
         &sd_ctx.card
     );
+
+    /* If default frequency fails, attempt fallback at 10 MHz */
+    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+        ESP_LOGW(SD_TAG, "SD mount at 20MHz failed (%s), retrying at 10MHz...", esp_err_to_name(err));
+        host.max_freq_khz = 10000;
+        err = esp_vfs_fat_sdspi_mount(
+            HAL_SD_MOUNT_POINT,
+            &host,
+            &slot_config,
+            &mount_config,
+            &sd_ctx.card
+        );
+    }
 
     if (err != ESP_OK) {
         if (err == ESP_FAIL) {

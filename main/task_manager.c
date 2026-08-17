@@ -357,6 +357,44 @@ bool task_manager_is_running(void)
  * Task Implementations
  * ======================================================================== */
 
+static const char *get_screen_name(ui_screen_t screen)
+{
+    switch (screen) {
+        case UI_SCREEN_SCANNER:   return "SCANNER (0)";
+        case UI_SCREEN_MAP:       return "MAP (1)";
+        case UI_SCREEN_HUD:       return "HUD/RADAR (2)";
+        case UI_SCREEN_MODES:     return "MODES (3)";
+        case UI_SCREEN_SPECTRUM:  return "SPECTRUM (4)";
+        case UI_SCREEN_SETTINGS:  return "SETTINGS (5)";
+        case UI_SCREEN_LOG:       return "LOG (6)";
+        case UI_SCREEN_MAIN_MENU: return "MAIN_MENU (7)";
+        default:                  return "UNKNOWN";
+    }
+}
+
+static const char *get_key_name(ui_key_t key)
+{
+    switch (key) {
+        case UI_KEY_UP:    return "UP";
+        case UI_KEY_DOWN:  return "DOWN";
+        case UI_KEY_LEFT:  return "LEFT";
+        case UI_KEY_RIGHT: return "RIGHT";
+        case UI_KEY_ENTER: return "ENTER";
+        case UI_KEY_BACK:  return "BACK/ESC";
+        case UI_KEY_MENU:  return "MENU";
+        case UI_KEY_TAB:   return "TAB";
+        case UI_KEY_SPACE: return "SPACE";
+        case UI_KEY_1:     return "KEY_1";
+        case UI_KEY_2:     return "KEY_2";
+        case UI_KEY_3:     return "KEY_3";
+        case UI_KEY_4:     return "KEY_4";
+        case UI_KEY_5:     return "KEY_5";
+        case UI_KEY_6:     return "KEY_6";
+        case UI_KEY_7:     return "KEY_7";
+        default:           return "NONE/OTHER";
+    }
+}
+
 /**
  * @brief UI Render task — refreshes the display at ~20 fps.
  */
@@ -370,6 +408,7 @@ static void task_ui_render(void *arg)
     esp_task_wdt_add(NULL);
 
     static uint32_t s_last_sim_tick_ms = 0;
+    static uint32_t s_last_heartbeat_ms = 0;
     static uint32_t s_frame_count = 0;
     static ui_screen_t s_last_logged_screen = UI_SCREEN_COUNT;
 
@@ -380,20 +419,16 @@ static void task_ui_render(void *arg)
         /* Poll Keyboard Input */
         ui_key_t key = UI_KEY_NONE;
         if (hal_keyboard_read(&key) == ESP_OK && key != UI_KEY_NONE) {
-            ESP_LOGI(TAG, "[KEY] Received key event: %d on screen %d", (int)key, (int)ui_manager_get_current_screen());
+            ESP_LOGI(TAG, "[KEY INPUT] Key '%s' (%d) pressed on screen '%s'",
+                     get_key_name(key), (int)key, get_screen_name(ui_manager_get_current_screen()));
             ui_manager_handle_key(key);
-            switch (ui_manager_get_current_screen()) {
-                case UI_SCREEN_MAIN_MENU: screen_menu_handle_key(key); break;
-                case UI_SCREEN_MODES:     screen_modes_handle_key(key); break;
-                case UI_SCREEN_SETTINGS:  screen_settings_handle_key(key); break;
-                case UI_SCREEN_HUD:       screen_hud_handle_key(key); break;
-                default: break;
-            }
+            ESP_LOGI(TAG, "[KEY ACTION] Handled key '%s' -> Current screen now '%s'",
+                     get_key_name(key), get_screen_name(ui_manager_get_current_screen()));
         }
 
-        /* Wait for UI events or timeout for periodic refresh (~20fps) */
+        /* Wait for UI events or timeout for high-rate refresh (~50fps / 20ms) */
         uint32_t set_bits = 0;
-        data_pipeline_wait_ui_events(PIPELINE_EVT_ALL, 50, &set_bits);
+        data_pipeline_wait_ui_events(PIPELINE_EVT_ALL, 20, &set_bits);
 
         /* Update simulation engine if enabled */
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
@@ -430,13 +465,18 @@ static void task_ui_render(void *arg)
         /* Log screen transition */
         ui_screen_t curr_screen = ui_manager_get_current_screen();
         if (curr_screen != s_last_logged_screen) {
-            ESP_LOGI(TAG, "[UI] Screen changed -> %d (frame=%lu, Free Heap=%u bytes)",
-                     (int)curr_screen, (unsigned long)s_frame_count, (unsigned)esp_get_free_heap_size());
+            ESP_LOGI(TAG, "[UI SCREEN] Screen Transition: '%s' -> '%s' (Frame: %lu, Free Heap: %u bytes)",
+                     get_screen_name(s_last_logged_screen), get_screen_name(curr_screen),
+                     (unsigned long)s_frame_count, (unsigned)esp_get_free_heap_size());
             s_last_logged_screen = curr_screen;
         }
 
-        if (s_frame_count == 1) {
-            ESP_LOGI(TAG, "[UI] Rendering first frame successfully on display...");
+        /* Periodic UI heartbeat every 2 seconds */
+        if (now_ms - s_last_heartbeat_ms >= 2000) {
+            s_last_heartbeat_ms = now_ms;
+            ESP_LOGI(TAG, "[UI STATUS] Active Screen: '%s' | Frame: %lu | Drones: %u | Free Heap: %u bytes",
+                     get_screen_name(curr_screen), (unsigned long)s_frame_count,
+                     reg ? registry_get_active_count(reg) : 0, (unsigned)esp_get_free_heap_size());
         }
 
         /* Render status bar */

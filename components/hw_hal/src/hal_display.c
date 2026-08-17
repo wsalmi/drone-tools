@@ -22,6 +22,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_heap_caps.h"
 #endif
 
@@ -65,7 +66,7 @@
  * (MX+MV) used by display_hw_init() below.
  */
 #define DISPLAY_X_OFFSET         40
-#define DISPLAY_Y_OFFSET         52
+#define DISPLAY_Y_OFFSET         53
 
 /* Font: 6x8 pixel monospace (ASCII 32–126) */
 #define FONT_WIDTH              6
@@ -224,6 +225,7 @@ static struct {
     hal_module_state_t module_state;
 #ifndef CONFIG_HAL_DISPLAY_MOCK
     spi_device_handle_t spi_handle;
+    SemaphoreHandle_t mutex;
 #endif
 } display_ctx = {
     .initialized = false,
@@ -527,6 +529,12 @@ esp_err_t hal_display_init(void)
         return ESP_ERR_NO_MEM;
     }
 
+#ifndef CONFIG_HAL_DISPLAY_MOCK
+    if (display_ctx.mutex == NULL) {
+        display_ctx.mutex = xSemaphoreCreateMutex();
+    }
+#endif
+
     /* Clear framebuffer to black */
     memset(display_ctx.framebuffer, 0, DISPLAY_FB_SIZE);
 
@@ -774,12 +782,21 @@ esp_err_t hal_display_flush(void)
     }
 
 #ifndef CONFIG_HAL_DISPLAY_MOCK
+    if (display_ctx.mutex != NULL) {
+        if (xSemaphoreTake(display_ctx.mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+
     /* Set window to full screen */
     esp_err_t err = display_set_window(0, 0,
                                        HAL_DISPLAY_WIDTH - 1,
                                        HAL_DISPLAY_HEIGHT - 1);
     if (err != ESP_OK) {
         display_ctx.module_state.error_count++;
+        if (display_ctx.mutex != NULL) {
+            xSemaphoreGive(display_ctx.mutex);
+        }
         return err;
     }
 
@@ -807,12 +824,18 @@ esp_err_t hal_display_flush(void)
             display_ctx.module_state.error_count++;
             ESP_LOGE(DISPLAY_TAG, "Framebuffer flush failed: %s",
                      esp_err_to_name(err));
+            if (display_ctx.mutex != NULL) {
+                xSemaphoreGive(display_ctx.mutex);
+            }
             return err;
         }
         src += chunk;
         remaining -= chunk;
     }
 
+    if (display_ctx.mutex != NULL) {
+        xSemaphoreGive(display_ctx.mutex);
+    }
     return ESP_OK;
 #else
     return ESP_OK;

@@ -300,11 +300,19 @@ esp_err_t ui_manager_handle_key(ui_key_t key)
             handle_key_map(key);
             break;
         case UI_SCREEN_HUD:
+            screen_hud_handle_key((uint8_t)key);
+            break;
         case UI_SCREEN_MODES:
+            screen_modes_handle_key((uint8_t)key);
+            break;
+        case UI_SCREEN_SETTINGS:
+            screen_settings_handle_key((uint8_t)key);
+            break;
+        case UI_SCREEN_LOG:
+            screen_log_handle_key((uint8_t)key);
+            break;
         case UI_SCREEN_AIRCRAFT_LIST:
         case UI_SCREEN_SPECTRUM:
-        case UI_SCREEN_SETTINGS:
-        case UI_SCREEN_LOG:
         default:
             handle_key_generic(key);
             break;

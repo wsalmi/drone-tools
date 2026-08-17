@@ -81,14 +81,14 @@ esp_err_t screen_menu_render(void)
         uint16_t bg_color = HAL_COLOR_BLACK;
 
         if (i == s_state.selected_item) {
-            /* Highlight selected item */
-            bg_color = 0x2104; /* dark gray */
+            /* Highlight selected item with vibrant blue background */
+            bg_color = 0x0115; /* distinct navy/blue */
             fg_color = HAL_COLOR_YELLOW;
             hal_display_draw_rect(0, y - 1, HAL_DISPLAY_WIDTH, SCREEN_MENU_LINE_HEIGHT,
                                   bg_color, true);
 
-            /* Draw selection indicator */
-            hal_display_draw_text(4, y, ">", HAL_COLOR_GREEN, bg_color);
+            /* Draw high-visibility selection indicator */
+            hal_display_draw_text(2, y, ">>", HAL_COLOR_GREEN, bg_color);
         }
 
         /* Draw menu label */

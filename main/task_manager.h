@@ -49,16 +49,16 @@ extern "C" {
 #define TASK_PRIO_LOGGER        2   /**< Logger — lowest priority */
 
 /* --- Core 1 task stack sizes (bytes) --- */
-#define TASK_STACK_UI_RENDER    4096    /**< UI render task */
-#define TASK_STACK_DECODER      3072    /**< Decoder pipeline */
+#define TASK_STACK_UI_RENDER    3072    /**< UI render task */
+#define TASK_STACK_DECODER      3584    /**< Decoder pipeline */
 #define TASK_STACK_GPS_READER   2560    /**< GPS position dispatcher */
-#define TASK_STACK_LOGGER       4096    /**< Logger writes to SD/SPIFFS */
+#define TASK_STACK_LOGGER       2560    /**< Logger writes to SD/SPIFFS */
 
 /* --- Core 0 task config (for reference, managed by Detection Service) --- */
 #define TASK_PRIO_WIFI_BLE      5
 #define TASK_PRIO_RF_MONITOR    6
 #define TASK_PRIO_SDR_RECEIVER  4
-#define TASK_STACK_WIFI_BLE     3072
+#define TASK_STACK_WIFI_BLE     2048
 #define TASK_STACK_RF_MONITOR   2048
 #define TASK_STACK_SDR_RECEIVER 2048
 
