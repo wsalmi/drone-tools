@@ -7,6 +7,7 @@
 
 #include "unity.h"
 #include "ui_manager.h"
+#include "screen_menu.h"
 #include "hal_display.h"
 #include <string.h>
 
@@ -95,14 +96,13 @@ void test_navigate_saves_previous_screen(void)
 
 void test_main_menu_down_key_increments_selection(void)
 {
-    const ui_state_t *state = ui_manager_get_state();
-    TEST_ASSERT_EQUAL(0, state->selected_aircraft_idx);
+    TEST_ASSERT_EQUAL(0, screen_menu_get_selected_item());
 
     ui_manager_handle_key(UI_KEY_DOWN);
-    TEST_ASSERT_EQUAL(1, state->selected_aircraft_idx);
+    TEST_ASSERT_EQUAL(1, screen_menu_get_selected_item());
 
     ui_manager_handle_key(UI_KEY_DOWN);
-    TEST_ASSERT_EQUAL(2, state->selected_aircraft_idx);
+    TEST_ASSERT_EQUAL(2, screen_menu_get_selected_item());
 }
 
 void test_main_menu_up_key_decrements_selection(void)
@@ -111,19 +111,18 @@ void test_main_menu_up_key_decrements_selection(void)
     ui_manager_handle_key(UI_KEY_DOWN);
     ui_manager_handle_key(UI_KEY_DOWN);
 
-    const ui_state_t *state = ui_manager_get_state();
-    TEST_ASSERT_EQUAL(2, state->selected_aircraft_idx);
+    TEST_ASSERT_EQUAL(2, screen_menu_get_selected_item());
 
     ui_manager_handle_key(UI_KEY_UP);
-    TEST_ASSERT_EQUAL(1, state->selected_aircraft_idx);
+    TEST_ASSERT_EQUAL(1, screen_menu_get_selected_item());
 }
 
 void test_main_menu_enter_navigates_to_selected(void)
 {
-    /* Select item 1 (MAP screen) */
+    /* Select item 1 (Radar screen). */
     ui_manager_handle_key(UI_KEY_DOWN);
     ui_manager_handle_key(UI_KEY_ENTER);
-    TEST_ASSERT_EQUAL(UI_SCREEN_MAP, ui_manager_get_current_screen());
+    TEST_ASSERT_EQUAL(UI_SCREEN_HUD, ui_manager_get_current_screen());
 }
 
 void test_main_menu_enter_navigates_to_scanner(void)
@@ -137,9 +136,7 @@ void test_main_menu_up_wraps_to_bottom(void)
 {
     /* At index 0, pressing up should wrap to last item */
     ui_manager_handle_key(UI_KEY_UP);
-    const ui_state_t *state = ui_manager_get_state();
-    /* Should wrap to UI_SCREEN_COUNT - 2 (excluding MAIN_MENU itself) */
-    TEST_ASSERT_EQUAL(UI_SCREEN_COUNT - 2, state->selected_aircraft_idx);
+    TEST_ASSERT_EQUAL(SCREEN_MENU_ITEM_COUNT - 1, screen_menu_get_selected_item());
 }
 
 /* ========================================================================
@@ -316,9 +313,9 @@ void test_update_module_status(void)
     );
 
     const ui_state_t *state = ui_manager_get_state();
-    TEST_ASSERT_EQUAL(HAL_STATUS_ACTIVE, state->module_status[UI_MODULE_IDX_LORA]);
-    TEST_ASSERT_EQUAL(HAL_STATUS_INACTIVE, state->module_status[UI_MODULE_IDX_NRF24]);
-    TEST_ASSERT_EQUAL(HAL_STATUS_ERROR, state->module_status[UI_MODULE_IDX_SDR]);
+    TEST_ASSERT_EQUAL(HAL_STATUS_ACTIVE, state->module_status[UI_MODULE_IDX_WIFI]);
+    TEST_ASSERT_EQUAL(HAL_STATUS_INACTIVE, state->module_status[UI_MODULE_IDX_BLE]);
+    TEST_ASSERT_EQUAL(HAL_STATUS_ERROR, state->module_status[UI_MODULE_IDX_LORA]);
     TEST_ASSERT_EQUAL(HAL_STATUS_ACTIVE, state->module_status[UI_MODULE_IDX_GPS]);
     TEST_ASSERT_EQUAL(HAL_STATUS_ACTIVE, state->module_status[UI_MODULE_IDX_SD]);
     TEST_ASSERT_TRUE(state->gps_fix_valid);
@@ -432,14 +429,15 @@ void test_none_key_is_noop(void)
 
 void test_generic_screen_left_right_navigation(void)
 {
-    ui_manager_navigate_to(UI_SCREEN_SPECTRUM);
-    TEST_ASSERT_EQUAL(UI_SCREEN_SPECTRUM, ui_manager_get_current_screen());
-
-    ui_manager_handle_key(UI_KEY_RIGHT);
-    TEST_ASSERT_EQUAL(UI_SCREEN_MODES, ui_manager_get_current_screen());
+    ui_manager_navigate_to(UI_SCREEN_STATUS);
+    TEST_ASSERT_EQUAL(UI_SCREEN_STATUS, ui_manager_get_current_screen());
 
     ui_manager_handle_key(UI_KEY_LEFT);
-    TEST_ASSERT_EQUAL(UI_SCREEN_SPECTRUM, ui_manager_get_current_screen());
+    TEST_ASSERT_EQUAL(UI_SCREEN_HUD, ui_manager_get_current_screen());
+
+    ui_manager_navigate_to(UI_SCREEN_STATUS);
+    ui_manager_handle_key(UI_KEY_RIGHT);
+    TEST_ASSERT_EQUAL(UI_SCREEN_MODES, ui_manager_get_current_screen());
 }
 
 /* ========================================================================
@@ -452,22 +450,22 @@ void test_direct_numeric_shortcuts(void)
     TEST_ASSERT_EQUAL(UI_SCREEN_SCANNER, ui_manager_get_current_screen());
 
     TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_2));
-    TEST_ASSERT_EQUAL(UI_SCREEN_MAP, ui_manager_get_current_screen());
-
-    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_3));
     TEST_ASSERT_EQUAL(UI_SCREEN_HUD, ui_manager_get_current_screen());
 
-    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_4));
-    TEST_ASSERT_EQUAL(UI_SCREEN_SPECTRUM, ui_manager_get_current_screen());
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_3));
+    TEST_ASSERT_EQUAL(UI_SCREEN_MAP, ui_manager_get_current_screen());
 
-    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_5));
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_4));
     TEST_ASSERT_EQUAL(UI_SCREEN_MODES, ui_manager_get_current_screen());
 
-    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_6));
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_5));
     TEST_ASSERT_EQUAL(UI_SCREEN_SETTINGS, ui_manager_get_current_screen());
 
-    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_7));
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_6));
     TEST_ASSERT_EQUAL(UI_SCREEN_LOG, ui_manager_get_current_screen());
+
+    TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_7));
+    TEST_ASSERT_EQUAL(UI_SCREEN_STATUS, ui_manager_get_current_screen());
 
     TEST_ASSERT_EQUAL(ESP_OK, ui_manager_handle_key(UI_KEY_MENU));
     TEST_ASSERT_EQUAL(UI_SCREEN_MAIN_MENU, ui_manager_get_current_screen());

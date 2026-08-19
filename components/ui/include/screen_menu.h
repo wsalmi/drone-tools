@@ -98,6 +98,11 @@ esp_err_t screen_menu_render(void);
 esp_err_t screen_menu_handle_key(uint8_t key);
 
 /**
+ * @brief Return the current menu selection for rendering diagnostics and tests.
+ */
+uint8_t screen_menu_get_selected_item(void);
+
+/**
  * @brief Deinitialize the Main Menu screen.
  *
  * @return ESP_OK on success

@@ -364,10 +364,12 @@ if(EXISTS "${COMPONENTS_DIR}/hw_hal/src/hal_gps.c")
 
     # GPS Unit Tests
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test_hal_gps.c")
-        add_unit_test(test_hal_gps
-            SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_hal_gps.c
-            LIBRARIES hal_gps_parser
-        )
+        # This target exercises the real parser and must not link hal_mocks,
+        # which provides a separate implementation of the public GPS HAL.
+        add_executable(test_hal_gps ${CMAKE_CURRENT_SOURCE_DIR}/test_hal_gps.c)
+        target_include_directories(test_hal_gps PRIVATE ${COMPONENT_INCLUDE_DIRS})
+        target_link_libraries(test_hal_gps PRIVATE unity esp_idf_mocks hal_gps_parser)
+        add_test(NAME test_hal_gps COMMAND test_hal_gps)
     endif()
 endif()
 
@@ -742,7 +744,7 @@ if(EXISTS "${COMPONENTS_DIR}/ui/src/ui_manager.c")
         ${COMPONENTS_DIR}/ui/src/screen_menu.c
         ${COMPONENTS_DIR}/ui/src/screen_hud.c
         ${COMPONENTS_DIR}/ui/src/screen_modes.c
-        ${COMPONENTS_DIR}/ui/src/screen_spectrum.c
+        ${COMPONENTS_DIR}/ui/src/screen_status.c
         ${COMPONENTS_DIR}/ui/src/screen_settings.c
         ${COMPONENTS_DIR}/ui/src/screen_log.c
         ${COMPONENTS_DIR}/ui/src/screen_scanner.c

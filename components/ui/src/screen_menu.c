@@ -165,6 +165,11 @@ esp_err_t screen_menu_handle_key(uint8_t key)
     return ESP_OK;
 }
 
+uint8_t screen_menu_get_selected_item(void)
+{
+    return s_state.selected_item;
+}
+
 esp_err_t screen_menu_deinit(void)
 {
     s_state.initialized = false;

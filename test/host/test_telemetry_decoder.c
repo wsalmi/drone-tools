@@ -328,7 +328,7 @@ void test_telemetry_decode_unknown_protocol_returns_error(void)
     decoded_telemetry_t out;
 
     memset(&raw, 0, sizeof(raw));
-    raw.source = DETECTION_SOURCE_SDR;
+    raw.source = DETECTION_SOURCE_LORA;
     raw.rssi_dbm = -80;
     raw.frequency_hz = 100000000; /* 100 MHz - no match */
     raw.timestamp_utc_ms = 1700000003000ULL;
