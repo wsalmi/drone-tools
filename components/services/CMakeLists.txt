@@ -6,13 +6,11 @@ idf_component_register(
           "src/elrs_decoder.c"
           "src/geolocation_service.c"
           "src/pilot_locator.c"
-          "src/telemetry_decoder.c"
-          "src/detection_service.c"
-          "src/alert_engine.c"
-          "src/spectrum_analyzer.c"
-          "src/data_logger.c"
-          "src/simulation_service.c"
-          "src/web_server_service.c"
-    INCLUDE_DIRS "include"
-    REQUIRES common hw_hal domain esp_http_server esp_wifi
+	          "src/telemetry_decoder.c"
+	          "src/detection_service.c"
+	          "src/alert_engine.c"
+	          "src/data_logger.c"
+	          "src/simulation_service.c"
+	    INCLUDE_DIRS "include"
+	    REQUIRES common hw_hal domain esp_wifi
 )

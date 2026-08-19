@@ -131,10 +131,12 @@ static const char *TAG = "hal_lora";
  * GPIO Pin Definitions for Cardputer Cap LoRa
  * ======================================================================== */
 
-/* LoRa SX1262 on SPI3_HOST shared bus (brucePins.conf matching) */
-#define PIN_LORA_CS         5   /* Chip Select (G5) */
-#define PIN_LORA_BUSY       4   /* IO2 / Busy (G4) */
-#define PIN_LORA_DIO1       3   /* IO0 / DIO1 (G3) */
+/* M5 Cap LoRa868 for Cardputer ADV: SCK=40, MOSI=14, MISO=39,
+ * NSS=5, RST=3, IRQ=4 and BUSY=6.  SPI pins are configured by main.c. */
+#define PIN_LORA_CS         5
+#define PIN_LORA_RESET      3
+#define PIN_LORA_IRQ        4
+#define PIN_LORA_BUSY       6
 
 /* ========================================================================
  * Module Internal State
@@ -325,8 +327,9 @@ static esp_err_t sx1262_read_buffer(uint8_t offset, uint8_t *data, size_t len)
  */
 static void sx1262_hw_reset(void)
 {
-    uint8_t stdby = SX1262_STANDBY_RC;
-    sx1262_write_command(SX1262_CMD_SET_STANDBY, &stdby, 1);
+    gpio_set_level(PIN_LORA_RESET, 0);
+    vTaskDelay(pdMS_TO_TICKS(2));
+    gpio_set_level(PIN_LORA_RESET, 1);
     vTaskDelay(pdMS_TO_TICKS(10));
 }
 
@@ -546,8 +549,12 @@ static esp_err_t sx1262_spi_init(void)
     gpio_set_direction(PIN_LORA_BUSY, GPIO_MODE_INPUT);
     gpio_set_pull_mode(PIN_LORA_BUSY, GPIO_PULLDOWN_ONLY);
 
-    gpio_reset_pin(PIN_LORA_DIO1);
-    gpio_set_direction(PIN_LORA_DIO1, GPIO_MODE_INPUT);
+    gpio_reset_pin(PIN_LORA_IRQ);
+    gpio_set_direction(PIN_LORA_IRQ, GPIO_MODE_INPUT);
+
+    gpio_reset_pin(PIN_LORA_RESET);
+    gpio_set_direction(PIN_LORA_RESET, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_LORA_RESET, 1);
 
     spi_device_interface_config_t devcfg = {
         .clock_speed_hz = 2000000, /* 2 MHz for SX1262 */
@@ -824,7 +831,7 @@ esp_err_t hal_lora_get_packet(lora_packet_t *packet, uint32_t timeout_ms)
         }
 
         /* Check DIO1 pin for interrupt indication */
-        if (gpio_get_level(PIN_LORA_DIO1)) {
+        if (gpio_get_level(PIN_LORA_IRQ)) {
             /* Read IRQ status to confirm RX_DONE */
             uint8_t irq_raw[2] = {0};
             esp_err_t ret = sx1262_read_command(SX1262_CMD_GET_IRQ_STATUS,

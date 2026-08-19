@@ -2,7 +2,8 @@
  * @file detection_service.h
  * @brief Detection Service — orchestrates all RF detection modules.
  *
- * Manages WiFi, BLE, LoRa, NRF24, and SDR source modules, producing
+ * Manages WiFi Remote ID, BLE Remote ID, and the SX1262 passive monitor,
+ * producing
  * unified raw_detection_t events into a FreeRTOS queue for downstream
  * processing (Telemetry Decoder, Protocol Classifier, Logger).
  *
@@ -47,14 +48,11 @@ extern "C" {
 /** @brief Default priority for WiFi/BLE scanner task */
 #define DETECTION_TASK_PRIO_WIFI    5
 
-/** @brief Default priority for RF monitor task (LoRa/NRF24) */
+/** @brief Default priority for the SX1262 passive monitor task */
 #define DETECTION_TASK_PRIO_RF      6
 
-/** @brief Default priority for SDR receiver task */
-#define DETECTION_TASK_PRIO_SDR     4
-
 /** @brief Number of detection source types */
-#define DETECTION_SOURCE_COUNT      5
+#define DETECTION_SOURCE_COUNT      3
 
 /* ========================================================================
  * Data Types
@@ -66,9 +64,7 @@ extern "C" {
 typedef enum {
     DETECTION_SOURCE_WIFI_RID = 0,  /**< WiFi NAN/Beacon RemoteID */
     DETECTION_SOURCE_BLE_RID,       /**< BLE Legacy Advertisement RemoteID */
-    DETECTION_SOURCE_LORA,          /**< LoRa SX1262 (862–928 MHz) */
-    DETECTION_SOURCE_NRF24,         /**< NRF24L01+ (2400–2525 MHz) */
-    DETECTION_SOURCE_SDR            /**< RTL-SDR broadband receiver */
+    DETECTION_SOURCE_LORA           /**< SX1262 passive monitor (862–928 MHz) */
 } detection_source_t;
 
 /**
@@ -96,7 +92,7 @@ typedef struct {
  * @brief Initialize the Detection Service.
  *
  * Creates the internal FreeRTOS queue (64 items) and probes each detection
- * module (WiFi, BLE, LoRa/NRF24, SDR) via their HAL status functions to
+ * module (WiFi, BLE, SX1262) via their HAL status functions to
  * determine which modules are available.
  *
  * Must be called after HAL modules and the GPS service are initialized.
@@ -113,8 +109,7 @@ esp_err_t detection_service_init(void);
  * Creates a FreeRTOS task for each module that was found available during
  * init. Each task runs on the appropriate CPU core:
  *   - WiFi/BLE scanner task → Core 0 (PRO_CPU), priority 5
- *   - RF monitor (LoRa/NRF24) task → Core 0 (PRO_CPU), priority 6
- *   - SDR receiver task → Core 0 (PRO_CPU), priority 4
+ *   - SX1262 passive monitor task → Core 0 (PRO_CPU), priority 6
  *
  * @return ESP_OK on success.
  * @return ESP_ERR_INVALID_STATE if not initialized or already started.
