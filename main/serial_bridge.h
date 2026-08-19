@@ -5,6 +5,8 @@
 #ifndef SERIAL_BRIDGE_H
 #define SERIAL_BRIDGE_H
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 
 esp_err_t serial_bridge_init(void);
