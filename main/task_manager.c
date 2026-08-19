@@ -27,12 +27,11 @@
 #include "screen_map.h"
 #include "screen_hud.h"
 #include "screen_modes.h"
-#include "screen_spectrum.h"
+#include "screen_status.h"
 #include "screen_settings.h"
 #include "screen_log.h"
 #include "hal_keyboard.h"
 #include "simulation_service.h"
-#include "web_server_service.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -360,13 +359,13 @@ bool task_manager_is_running(void)
 static const char *get_screen_name(ui_screen_t screen)
 {
     switch (screen) {
-        case UI_SCREEN_SCANNER:   return "SCANNER (0)";
-        case UI_SCREEN_MAP:       return "MAP (1)";
-        case UI_SCREEN_HUD:       return "HUD/RADAR (2)";
-        case UI_SCREEN_MODES:     return "MODES (3)";
-        case UI_SCREEN_SPECTRUM:  return "SPECTRUM (4)";
-        case UI_SCREEN_SETTINGS:  return "SETTINGS (5)";
-        case UI_SCREEN_LOG:       return "LOG (6)";
+        case UI_SCREEN_SCANNER:   return "VARREDURA (1)";
+        case UI_SCREEN_HUD:       return "RADAR (2)";
+        case UI_SCREEN_MAP:       return "MAPA (3)";
+        case UI_SCREEN_MODES:     return "MODOS (4)";
+        case UI_SCREEN_SETTINGS:  return "CONFIG (5)";
+        case UI_SCREEN_LOG:       return "REGISTROS (6)";
+        case UI_SCREEN_STATUS:    return "ESTADO (7)";
         case UI_SCREEN_MAIN_MENU: return "MAIN_MENU (7)";
         default:                  return "UNKNOWN";
     }
@@ -442,17 +441,6 @@ static void task_ui_render(void *arg)
             simulation_service_set_enabled(false);
         }
 
-        /* Manage Web Server lifecycle */
-        if (screen_modes_is_enabled(MODE_ITEM_WEBSERVER)) {
-            if (!web_server_service_is_active()) {
-                web_server_service_start();
-            }
-        } else {
-            if (web_server_service_is_active()) {
-                web_server_service_stop();
-            }
-        }
-
         /* Update notification system */
         ui_manager_update_notifications(now_ms);
 
@@ -503,8 +491,8 @@ static void task_ui_render(void *arg)
             case UI_SCREEN_MODES:
                 screen_modes_render();
                 break;
-            case UI_SCREEN_SPECTRUM:
-                screen_spectrum_render();
+            case UI_SCREEN_STATUS:
+                screen_status_render();
                 break;
             case UI_SCREEN_SETTINGS:
                 screen_settings_render();

@@ -6,13 +6,13 @@
  * on the M5 Stack Cardputer ADV (ESP32-S3).
  *
  * Initialization order:
- *   1. Hardware buses (SPI, UART, USB OTG)
- *   2. HAL modules: Display, SD Card, GPS, LoRa/NRF24 (via HW Manager), SDR,
- *      WiFi Scanner, BLE Scanner, Buzzer
+ *   1. Hardware buses (SPI e UART; USB-C preservada para atualizações)
+ *   2. HAL modules: Display, SD Card, GPS, SX1262, WiFi Scanner,
+ *      BLE Scanner e Buzzer
  *   3. Configuration loading: config.json + signatures.csv from SD Card
  *   4. Domain layer: aircraft_registry, protocol_signatures
  *   5. Services: detection_service, telemetry_decoder, protocol_classifier,
- *      geolocation_service, pilot_locator, data_logger, spectrum_analyzer, alert_engine
+ *      geolocation_service, pilot_locator, data_logger e alert_engine
  *   6. UI: ui_manager (all screens)
  *   7. Data pipeline + task manager → start tasks
  *
@@ -42,13 +42,10 @@
 #include "hal_sd.h"
 #include "hal_gps.h"
 #include "hal_lora.h"
-#include "hal_nrf24.h"
-#include "hal_sdr.h"
 #include "hal_wifi_scanner.h"
 #include "hal_ble_scanner.h"
 #include "hal_buzzer.h"
 #include "hal_keyboard.h"
-#include "hw_manager.h"
 
 /* Domain headers */
 #include "config_store.h"
@@ -62,10 +59,8 @@
 #include "geolocation_service.h"
 #include "pilot_locator.h"
 #include "data_logger.h"
-#include "spectrum_analyzer.h"
 #include "alert_engine.h"
 #include "simulation_service.h"
-#include "web_server_service.h"
 
 /* UI headers */
 #include "ui_manager.h"
@@ -196,12 +191,12 @@ static esp_err_t load_file_from_sd(const char *path, size_t max_size,
  * ======================================================================== */
 
 /**
- * @brief Phase 1: Initialize hardware buses (SPI, UART, USB).
+ * @brief Phase 1: Initialize hardware buses (SPI and UART).
  *
  * SPI2 (HSPI) — Display
- * SPI3 (VSPI) — LoRa/NRF24/SD Card (shared)
+ * SPI3 (VSPI) — SX1262 Cap LoRa868 and SD Card (shared)
  * UART1 — GPS
- * USB OTG — RTL-SDR
+ * USB-C — atualização de firmware e console Serial/JTAG, sem USB Host
  *
  * Note: ESP-IDF initializes SPI buses lazily when the first device is
  * registered, so explicit bus init is handled within each HAL driver.
@@ -298,6 +293,23 @@ static void init_phase_hal(void)
     } else {
         ESP_LOGW(TAG, "BLE Scanner init FAILED: %s", esp_err_to_name(err));
         init_show_status("BLE Scanner", "FAIL", true);
+    }
+
+    /* --- SX1262 Cap LoRa868: monitor passivo complementar --- */
+    lora_config_t lora_config = {
+        .frequency_hz = 868100000U,
+        .spreading_factor = 7,
+        .bandwidth_hz = 125000U,
+        .coding_rate = 5,
+        .tx_power_dbm = 0,
+    };
+    err = hal_lora_init(&lora_config);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "SX1262 Cap LoRa868: OK (passive RX)");
+        init_show_status("SX1262 868", "OK", false);
+    } else {
+        ESP_LOGW(TAG, "SX1262 init FAILED: %s", esp_err_to_name(err));
+        init_show_status("SX1262 868", "FAIL", true);
     }
 
     /* --- Buzzer --- */
@@ -488,9 +500,6 @@ static void init_phase_services(void)
         init_show_status("Data Logger", "FAIL", true);
     }
 
-    /* Spectrum Analyzer disabled for WiFi+BLE mode */
-    ESP_LOGI(TAG, "Spectrum Analyzer: SKIP (WiFi+BLE mode)");
-
     /* Alert Engine (depends on buzzer + geolocation + config) */
     err = alert_engine_init(&g_config.alert);
     if (err == ESP_OK) {
@@ -508,12 +517,6 @@ static void init_phase_services(void)
         init_show_status("Simulation", "OK", false);
     }
 
-    /* Web Server Service */
-    err = web_server_service_init();
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "[BOOT] Web Server / AP: OK");
-        init_show_status("Web / AP", "OK", false);
-    }
 }
 
 /**
@@ -534,11 +537,11 @@ static void init_phase_ui(void)
                  (unsigned)esp_get_free_heap_size());
         init_show_status("UI Manager", "OK", false);
 
-        /* Set initial module status based on WiFi and BLE scanner state */
+        /* State mirrors only modules in the field monitor. */
         ui_manager_update_module_status(
             hal_wifi_scanner_get_status(),
             hal_ble_scanner_get_status(),
-            HAL_STATUS_INACTIVE,
+            hal_lora_get_status(),
             hal_gps_get_status(),
             hal_sd_is_mounted() ? HAL_STATUS_ACTIVE : HAL_STATUS_INACTIVE);
 
@@ -582,7 +585,7 @@ static void init_phase_tasks(void)
     }
 
     /* Start Detection Service (creates Core 0 detection tasks) */
-    ESP_LOGI(TAG, "[BOOT] Launching Core 0 Detection Tasks (WiFi/BLE Sniffers)...");
+    ESP_LOGI(TAG, "[BOOT] Launching Core 0 Detection Tasks (WiFi/BLE/SX1262)...");
     err = detection_service_start();
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "[BOOT] Detection tasks started successfully on Core 0");
@@ -628,7 +631,8 @@ void app_main(void)
     ESP_LOGI(TAG, "==================================================");
     ESP_LOGI(TAG, "  DRONE TELEMETRY MONITOR — BOOT SEQUENCE");
     ESP_LOGI(TAG, "  Platform: M5Stack Cardputer ADV (ESP32-S3)");
-    ESP_LOGI(TAG, "  Target Mode: Pure WiFi + BLE Drone Detection");
+    ESP_LOGI(TAG, "  Target Mode: WiFi + BLE Remote ID + SX1262 passive monitor");
+    ESP_LOGI(TAG, "  USB-C: firmware update and Serial console only");
     ESP_LOGI(TAG, "  Initial Free Heap: %u bytes", (unsigned)esp_get_free_heap_size());
     ESP_LOGI(TAG, "==================================================");
 
@@ -650,9 +654,10 @@ void app_main(void)
     ESP_LOGI(TAG, "  Free Heap: %u bytes (Min Ever: %u bytes)",
              (unsigned)esp_get_free_heap_size(),
              (unsigned)esp_get_minimum_free_heap_size());
-    ESP_LOGI(TAG, "  Active modules: WiFi=%d BLE=%d GPS=%d SD=%d",
+    ESP_LOGI(TAG, "  Active modules: WiFi=%d BLE=%d SX1262=%d GPS=%d SD=%d",
              hal_wifi_scanner_get_status() == HAL_STATUS_ACTIVE,
              hal_ble_scanner_get_status() == HAL_STATUS_ACTIVE,
+             hal_lora_get_status() == HAL_STATUS_ACTIVE,
              hal_gps_get_status() == HAL_STATUS_ACTIVE,
              hal_sd_is_mounted());
     ESP_LOGI(TAG, "  Signatures loaded: %u", signatures_get_count());

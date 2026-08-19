@@ -47,7 +47,7 @@ extern "C" {
 /** @brief Maximum notification text length */
 #define UI_NOTIFICATION_TEXT_MAX    64
 
-/** @brief Number of module status slots (LoRa, NRF24, SDR, GPS, SD) */
+/** @brief Number of module status slots (WiFi, BLE, SX1262, GPS, SD) */
 #define UI_MODULE_COUNT             5
 
 /** @brief Status bar height in pixels */
@@ -57,9 +57,9 @@ extern "C" {
 #define UI_MAX_INPUT_LATENCY_MS     200
 
 /* Module indices for module_status array */
-#define UI_MODULE_IDX_LORA          0
-#define UI_MODULE_IDX_NRF24         1
-#define UI_MODULE_IDX_SDR           2
+#define UI_MODULE_IDX_WIFI          0
+#define UI_MODULE_IDX_BLE           1
+#define UI_MODULE_IDX_LORA          2
 #define UI_MODULE_IDX_GPS           3
 #define UI_MODULE_IDX_SD            4
 
@@ -72,12 +72,12 @@ extern "C" {
  */
 typedef enum {
     UI_SCREEN_SCANNER = 0,      /**< 1: Scanner: paginated aircraft list */
-    UI_SCREEN_MAP,              /**< 2: Map: 2D positional view */
-    UI_SCREEN_HUD,              /**< 3: HUD Dashboard (Dynamic live tactical view) */
-    UI_SCREEN_SPECTRUM,         /**< 4: Spectrum analyzer waterfall */
-    UI_SCREEN_MODES,            /**< 5: Modes / Sensors (Quick Toggles) */
-    UI_SCREEN_SETTINGS,         /**< 6: Configuration settings */
-    UI_SCREEN_LOG,              /**< 7: Log viewer / export & SD status */
+    UI_SCREEN_MAP,              /**< 3: Map: 2D positional view */
+    UI_SCREEN_HUD,              /**< 2: Radar tactical view */
+    UI_SCREEN_STATUS,           /**< 7: System and link status */
+    UI_SCREEN_MODES,            /**< 4: Modes / Sensors (Quick Toggles) */
+    UI_SCREEN_SETTINGS,         /**< 5: Configuration settings */
+    UI_SCREEN_LOG,              /**< 6: Log viewer / export & SD status */
     UI_SCREEN_MAIN_MENU,        /**< Main menu navigation */
     UI_SCREEN_AIRCRAFT_LIST,    /**< Aircraft list (detailed) */
     UI_SCREEN_COUNT             /**< Total number of screens */
@@ -141,7 +141,7 @@ typedef struct {
     bool notification_expire_set;       /**< Whether expire_ms has been resolved to absolute */
 
     /* Status bar data */
-    hal_status_t module_status[UI_MODULE_COUNT]; /**< LoRa, NRF24, SDR, GPS, SD */
+    hal_status_t module_status[UI_MODULE_COUNT]; /**< WiFi, BLE, SX1262, GPS, SD */
     uint8_t aircraft_count;             /**< Number of active aircraft */
     bool gps_fix_valid;                 /**< GPS has valid fix */
     bool sd_available;                  /**< SD card is mounted and writable */
@@ -222,15 +222,15 @@ void ui_manager_update_notifications(uint32_t current_tick_ms);
 /**
  * @brief Update the status bar module indicators.
  *
- * @param[in] lora_status   LoRa module status
- * @param[in] nrf24_status  NRF24 module status
- * @param[in] sdr_status    SDR module status
+ * @param[in] wifi_status   WiFi Remote ID scanner status
+ * @param[in] ble_status    BLE Remote ID scanner status
+ * @param[in] lora_status   SX1262 passive monitor status
  * @param[in] gps_status    GPS module status
  * @param[in] sd_status     SD card status
  */
-void ui_manager_update_module_status(hal_status_t lora_status,
-                                     hal_status_t nrf24_status,
-                                     hal_status_t sdr_status,
+void ui_manager_update_module_status(hal_status_t wifi_status,
+                                     hal_status_t ble_status,
+                                     hal_status_t lora_status,
                                      hal_status_t gps_status,
                                      hal_status_t sd_status);
 

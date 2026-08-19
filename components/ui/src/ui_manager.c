@@ -10,7 +10,7 @@
 #include "screen_menu.h"
 #include "screen_hud.h"
 #include "screen_modes.h"
-#include "screen_spectrum.h"
+#include "screen_status.h"
 #include "screen_settings.h"
 #include "screen_log.h"
 #include "hal_display.h"
@@ -26,7 +26,7 @@ static ui_state_t s_ui_state;
 /* ========================================================================
  * Status bar layout constants (240px wide, 12px tall)
  *
- * Layout: [LoRa][NRF][SDR] | AC:XX | [GPS] | [SD]
+ * Layout: [WiFi][BLE][SX1262] | AC:XX | [GPS] | [SD]
  * Each module indicator: 3 chars wide × 6px font = 18px + 2px gap = 20px
  * Module block: 5 modules × ~20px = ~100px
  * Aircraft count: "AC:XX" = 30px
@@ -50,20 +50,15 @@ static ui_state_t s_ui_state;
 /* Menu item labels for main menu navigation (used by screen renderers) */
 __attribute__((unused))
 static const char *s_screen_labels[] = {
-    "Scanner",
-    "Mapa",
-    "Aeronaves",
-    "Spectrum",
-    "Config",
-    "Log",
-    "Menu"
+    "Varredura", "Mapa", "Radar", "Estado", "Modos", "Config",
+    "Registros", "Menu", "Aeronaves"
 };
 
 /* Short labels for module status bar */
 static const char *s_module_labels[] = {
-    "WF",   /* WiFi Sniffer */
-    "BL",   /* BLE Scanner */
-    "RF",   /* RF Status */
+    "WF",   /* WiFi Remote ID */
+    "BL",   /* BLE Remote ID */
+    "L9",   /* SX1262 868 MHz */
     "GP",   /* GPS */
     "SD"    /* SD card */
 };
@@ -223,7 +218,7 @@ esp_err_t ui_manager_init(void)
     screen_menu_init();
     screen_hud_init();
     screen_modes_init();
-    screen_spectrum_init();
+    screen_status_init();
     screen_settings_init();
     screen_log_init();
 
@@ -265,17 +260,17 @@ esp_err_t ui_manager_handle_key(ui_key_t key)
         case UI_KEY_1:
             return ui_manager_navigate_to(UI_SCREEN_SCANNER);
         case UI_KEY_2:
-            return ui_manager_navigate_to(UI_SCREEN_MAP);
-        case UI_KEY_3:
             return ui_manager_navigate_to(UI_SCREEN_HUD);
+        case UI_KEY_3:
+            return ui_manager_navigate_to(UI_SCREEN_MAP);
         case UI_KEY_4:
-            return ui_manager_navigate_to(UI_SCREEN_SPECTRUM);
-        case UI_KEY_5:
             return ui_manager_navigate_to(UI_SCREEN_MODES);
-        case UI_KEY_6:
+        case UI_KEY_5:
             return ui_manager_navigate_to(UI_SCREEN_SETTINGS);
-        case UI_KEY_7:
+        case UI_KEY_6:
             return ui_manager_navigate_to(UI_SCREEN_LOG);
+        case UI_KEY_7:
+            return ui_manager_navigate_to(UI_SCREEN_STATUS);
         case UI_KEY_MENU:
             return ui_manager_navigate_to(UI_SCREEN_MAIN_MENU);
         case UI_KEY_BACK:
@@ -312,7 +307,7 @@ esp_err_t ui_manager_handle_key(ui_key_t key)
             screen_log_handle_key((uint8_t)key);
             break;
         case UI_SCREEN_AIRCRAFT_LIST:
-        case UI_SCREEN_SPECTRUM:
+        case UI_SCREEN_STATUS:
         default:
             handle_key_generic(key);
             break;
@@ -388,15 +383,15 @@ void ui_manager_update_notifications(uint32_t current_tick_ms)
     }
 }
 
-void ui_manager_update_module_status(hal_status_t lora_status,
-                                     hal_status_t nrf24_status,
-                                     hal_status_t sdr_status,
+void ui_manager_update_module_status(hal_status_t wifi_status,
+                                     hal_status_t ble_status,
+                                     hal_status_t lora_status,
                                      hal_status_t gps_status,
                                      hal_status_t sd_status)
 {
+    s_ui_state.module_status[UI_MODULE_IDX_WIFI] = wifi_status;
+    s_ui_state.module_status[UI_MODULE_IDX_BLE] = ble_status;
     s_ui_state.module_status[UI_MODULE_IDX_LORA] = lora_status;
-    s_ui_state.module_status[UI_MODULE_IDX_NRF24] = nrf24_status;
-    s_ui_state.module_status[UI_MODULE_IDX_SDR] = sdr_status;
     s_ui_state.module_status[UI_MODULE_IDX_GPS] = gps_status;
     s_ui_state.module_status[UI_MODULE_IDX_SD] = sd_status;
 

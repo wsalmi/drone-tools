@@ -15,13 +15,12 @@ extern "C" {
 #endif
 
 typedef enum {
-    MODE_ITEM_REMOTEID = 0,
+    MODE_ITEM_WIFI = 0,
+    MODE_ITEM_BLE,
     MODE_ITEM_LORA,
-    MODE_ITEM_NRF24,
-    MODE_ITEM_SDR,
     MODE_ITEM_GPS,
-    MODE_ITEM_BUZZER,
-    MODE_ITEM_WEBSERVER,
+    MODE_ITEM_ALERTS,
+    MODE_ITEM_SERIAL,
     MODE_ITEM_SIMULATION,
     MODE_ITEM_COUNT
 } mode_item_t;

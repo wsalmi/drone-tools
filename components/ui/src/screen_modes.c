@@ -18,25 +18,23 @@ static uint8_t s_selected_idx = 0;
 static uint8_t s_scroll_offset = 0;
 
 static bool s_modes_state[MODE_ITEM_COUNT] = {
-    [MODE_ITEM_REMOTEID]   = true,
+    [MODE_ITEM_WIFI]       = true,
+    [MODE_ITEM_BLE]        = true,
     [MODE_ITEM_LORA]       = true,
-    [MODE_ITEM_NRF24]      = false,
-    [MODE_ITEM_SDR]        = true,
     [MODE_ITEM_GPS]        = true,
-    [MODE_ITEM_BUZZER]     = true,
-    [MODE_ITEM_WEBSERVER]  = false,
+    [MODE_ITEM_ALERTS]     = true,
+    [MODE_ITEM_SERIAL]     = true,
     [MODE_ITEM_SIMULATION] = false,
 };
 
 static const char *s_mode_labels[MODE_ITEM_COUNT] = {
-    "1. RemoteID (WiFi/BLE)",
-    "2. LoRa 900MHz (SX1262)",
-    "3. NRF24 2.4GHz Scanner",
-    "4. RTL-SDR Spectrum",
-    "5. GPS Monitor",
-    "6. Buzzer / Alertas",
-    "7. Wi-Fi AP & Web Server",
-    "8. Modo Demo / Simulacao"
+    "1. Wi-Fi Remote ID",
+    "2. BLE Remote ID",
+    "3. SX1262 passivo 868",
+    "4. GPS do operador",
+    "5. Alertas sonoros",
+    "6. Ponte Serial USB",
+    "7. Emulador / simulacao"
 };
 
 esp_err_t screen_modes_init(void)
@@ -59,7 +57,7 @@ void screen_modes_set_enabled(mode_item_t item, bool enabled)
 {
     if ((int)item >= 0 && item < MODE_ITEM_COUNT) {
         s_modes_state[item] = enabled;
-        if (item == MODE_ITEM_BUZZER) {
+        if (item == MODE_ITEM_ALERTS) {
             alert_engine_set_silent(!enabled);
         }
     }
@@ -141,7 +139,7 @@ esp_err_t screen_modes_handle_key(uint8_t key)
         case UI_KEY_SPACE:
             /* Toggle current mode */
             s_modes_state[s_selected_idx] = !s_modes_state[s_selected_idx];
-            if (s_selected_idx == MODE_ITEM_BUZZER) {
+            if (s_selected_idx == MODE_ITEM_ALERTS) {
                 alert_engine_set_silent(!s_modes_state[s_selected_idx]);
             }
             break;

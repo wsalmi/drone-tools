@@ -2,8 +2,7 @@
  * @file screen_menu.c
  * @brief Main Menu screen implementation — navigation hub for all screens.
  *
- * Displays the main menu with 6 options (Scanner, Mapa, Aeronaves,
- * Spectrum, Config, Log) and handles navigation to the selected screen.
+ * Displays seven direct actions for rapid field operation.
  *
  * Validates: Requirements 9.1
  */
@@ -25,24 +24,20 @@ static screen_menu_state_t s_state = {0};
  * ======================================================================== */
 
 static const menu_item_t s_menu_items[SCREEN_MENU_ITEM_COUNT] = {
-    { .label = "1. Scanner",         .target_screen = (uint8_t)UI_SCREEN_SCANNER },
-    { .label = "2. Mapa",            .target_screen = (uint8_t)UI_SCREEN_MAP },
-    { .label = "3. HUD Tatico",      .target_screen = (uint8_t)UI_SCREEN_HUD },
-    { .label = "4. Modos & Web",     .target_screen = (uint8_t)UI_SCREEN_MODES },
-    { .label = "5. Configuracoes",   .target_screen = (uint8_t)UI_SCREEN_SETTINGS },
-    { .label = "6. Logs SD",         .target_screen = (uint8_t)UI_SCREEN_LOG },
-    { .label = "7. Status do Sistema",.target_screen = (uint8_t)UI_SCREEN_SPECTRUM },
+    { .label = "1. Varredura",        .target_screen = (uint8_t)UI_SCREEN_SCANNER },
+    { .label = "2. Radar",             .target_screen = (uint8_t)UI_SCREEN_HUD },
+    { .label = "3. Mapa",              .target_screen = (uint8_t)UI_SCREEN_MAP },
+    { .label = "4. Modos",             .target_screen = (uint8_t)UI_SCREEN_MODES },
+    { .label = "5. Configuracao",      .target_screen = (uint8_t)UI_SCREEN_SETTINGS },
+    { .label = "6. Registros",         .target_screen = (uint8_t)UI_SCREEN_LOG },
+    { .label = "7. Estado",            .target_screen = (uint8_t)UI_SCREEN_STATUS },
 };
 
 /* Menu item descriptions (secondary text) */
 static const char *s_menu_descriptions[SCREEN_MENU_ITEM_COUNT] = {
-    "Drones & RID (WiFi/BLE)",
-    "Vista 2D posicional",
-    "Telemetria e Piloto",
-    "Simulacao e Web Server",
-    "Parametros e Alarmes",
-    "Registros em /sdcard",
-    "CPU, RAM e Sensores"
+    "Drones & RID (WiFi/BLE)", "Alvos em visao tática", "Vista 2D posicional",
+    "Fontes, Serial e simulacao", "Parametros e alertas", "Registros em /sdcard",
+    "Sensores e elo Serial"
 };
 
 /* ========================================================================
@@ -145,22 +140,22 @@ esp_err_t screen_menu_handle_key(uint8_t key)
             ui_manager_navigate_to(UI_SCREEN_SCANNER);
             break;
         case UI_KEY_2:
-            ui_manager_navigate_to(UI_SCREEN_MAP);
-            break;
-        case UI_KEY_3:
             ui_manager_navigate_to(UI_SCREEN_HUD);
             break;
-        case UI_KEY_4:
-            ui_manager_navigate_to(UI_SCREEN_SPECTRUM);
+        case UI_KEY_3:
+            ui_manager_navigate_to(UI_SCREEN_MAP);
             break;
-        case UI_KEY_5:
+        case UI_KEY_4:
             ui_manager_navigate_to(UI_SCREEN_MODES);
             break;
-        case UI_KEY_6:
+        case UI_KEY_5:
             ui_manager_navigate_to(UI_SCREEN_SETTINGS);
             break;
-        case UI_KEY_7:
+        case UI_KEY_6:
             ui_manager_navigate_to(UI_SCREEN_LOG);
+            break;
+        case UI_KEY_7:
+            ui_manager_navigate_to(UI_SCREEN_STATUS);
             break;
 
         default:
