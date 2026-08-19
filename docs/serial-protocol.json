@@ -1,0 +1,7 @@
+{
+  "name": "drone-telemetry-serial/v1",
+  "transport": "USB Serial/JTAG",
+  "encoding": "NDJSON UTF-8",
+  "commands": ["sync", "shortcut", "simulation"],
+  "messages": ["hello", "state", "aircraft", "ack"]
+}
