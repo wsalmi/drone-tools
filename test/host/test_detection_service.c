@@ -11,7 +11,6 @@
 #include "hal_mocks.h"
 #include "hal_wifi_scanner.h"
 #include "hal_ble_scanner.h"
-#include "hw_manager.h"
 
 #include <string.h>
 
@@ -25,8 +24,6 @@ void setUp(void)
     mock_hal_wifi_scanner_reset();
     mock_hal_ble_scanner_reset();
     mock_hal_lora_reset();
-    mock_hal_nrf24_reset();
-    mock_hal_sdr_reset();
     mock_hal_gps_reset();
 
     /* Initialize WiFi and BLE scanners so they're not in ERROR state */
@@ -36,10 +33,9 @@ void setUp(void)
     /* Set GPS with a valid fix */
     mock_hal_gps_set_fix(true, -23.550520, -46.633309, 760.5f, 8, 1.2f);
 
-    /* Initialize HW Manager so hw_manager_get_state() works */
+    /* SX1262 is the supplementary passive monitor. */
     mock_hal_lora_set_init_result(ESP_OK);
     mock_hal_lora_set_status(HAL_STATUS_ACTIVE);
-    hw_manager_init(NULL);
 }
 
 void tearDown(void)
@@ -47,8 +43,6 @@ void tearDown(void)
     /* Fully deinitialize detection service to reset state between tests */
     detection_service_deinit();
 
-    /* Deinitialize HW manager */
-    hw_manager_deinit();
 }
 
 /* ========================================================================
@@ -83,7 +77,7 @@ void test_detection_service_init_detects_ble_available(void)
 
 void test_detection_service_init_detects_lora_available(void)
 {
-    /* HW Manager initialized with LoRa active */
+    /* SX1262 mock is active */
     esp_err_t err = detection_service_init();
     TEST_ASSERT_EQUAL(ESP_OK, err);
 
@@ -187,25 +181,22 @@ void test_detection_service_source_available_invalid_source(void)
     TEST_ASSERT_FALSE(detection_service_is_source_available((detection_source_t)99));
 }
 
-void test_detection_service_sdr_unavailable_when_inactive(void)
+void test_detection_service_sx1262_unavailable_when_inactive(void)
 {
-    /* SDR starts as INACTIVE by default in mock */
-    mock_hal_sdr_set_status(HAL_STATUS_INACTIVE);
+    mock_hal_lora_set_status(HAL_STATUS_INACTIVE);
 
     esp_err_t err = detection_service_init();
     TEST_ASSERT_EQUAL(ESP_OK, err);
 
-    TEST_ASSERT_FALSE(detection_service_is_source_available(DETECTION_SOURCE_SDR));
+    TEST_ASSERT_FALSE(detection_service_is_source_available(DETECTION_SOURCE_LORA));
 }
 
-void test_detection_service_sdr_available_when_active(void)
+void test_detection_service_does_not_expose_legacy_sources(void)
 {
-    mock_hal_sdr_set_status(HAL_STATUS_ACTIVE);
-
     esp_err_t err = detection_service_init();
     TEST_ASSERT_EQUAL(ESP_OK, err);
 
-    TEST_ASSERT_TRUE(detection_service_is_source_available(DETECTION_SOURCE_SDR));
+    TEST_ASSERT_FALSE(detection_service_is_source_available((detection_source_t)DETECTION_SOURCE_COUNT));
 }
 
 /* ========================================================================
@@ -238,8 +229,8 @@ int main(void)
     /* Queue and source tests */
     RUN_TEST(test_detection_service_queue_count_zero_when_not_initialized);
     RUN_TEST(test_detection_service_source_available_invalid_source);
-    RUN_TEST(test_detection_service_sdr_unavailable_when_inactive);
-    RUN_TEST(test_detection_service_sdr_available_when_active);
+    RUN_TEST(test_detection_service_sx1262_unavailable_when_inactive);
+    RUN_TEST(test_detection_service_does_not_expose_legacy_sources);
 
     return UNITY_END();
 }
