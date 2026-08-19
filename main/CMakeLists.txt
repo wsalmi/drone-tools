@@ -1,7 +1,8 @@
 idf_component_register(
-    SRCS "main.c"
-         "task_manager.c"
-         "data_pipeline.c"
+	SRCS "main.c"
+	     "task_manager.c"
+	     "data_pipeline.c"
+	     "serial_bridge.c"
     INCLUDE_DIRS "."
     REQUIRES
         hw_hal
@@ -10,5 +11,6 @@ idf_component_register(
         ui
         common
         nvs_flash
-        esp_timer
+	    esp_timer
+	    driver
 )

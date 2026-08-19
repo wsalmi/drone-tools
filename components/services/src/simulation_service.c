@@ -18,6 +18,7 @@ static const char *TAG = "simulation_svc";
 static bool s_sim_initialized = false;
 static bool s_sim_enabled = false;
 static uint32_t s_sim_tick_count = 0;
+static simulation_scenario_t s_sim_scenario = SIM_SCENARIO_FIELD_DEMO;
 
 typedef struct {
     char id[AIRCRAFT_ID_MAX_LEN];
@@ -35,7 +36,7 @@ typedef struct {
 } sim_drone_t;
 
 #define SIM_DRONE_COUNT 3
-static sim_drone_t s_drones[SIM_DRONE_COUNT] = {
+static const sim_drone_t s_drone_templates[SIM_DRONE_COUNT] = {
     {
         .id = "BRA-UAS-001",
         .protocol = PROTOCOL_REMOTEID,
@@ -80,11 +81,30 @@ static sim_drone_t s_drones[SIM_DRONE_COUNT] = {
     }
 };
 
+static sim_drone_t s_drones[SIM_DRONE_COUNT];
+
+static void apply_scenario(void)
+{
+    memcpy(s_drones, s_drone_templates, sizeof(s_drones));
+    for (uint8_t i = 0; i < SIM_DRONE_COUNT; ++i) {
+        if (s_sim_scenario == SIM_SCENARIO_SPARSE && i > 0) {
+            s_drones[i].radius_m += 1400.0f;
+            s_drones[i].angle_speed_deg *= 0.40f;
+        } else if (s_sim_scenario == SIM_SCENARIO_DENSE) {
+            s_drones[i].radius_m *= 0.55f;
+            s_drones[i].angle_speed_deg *= 1.75f;
+            s_drones[i].rssi_dbm += 8;
+        }
+    }
+}
+
 esp_err_t simulation_service_init(void)
 {
     s_sim_initialized = true;
     s_sim_enabled = false;
     s_sim_tick_count = 0;
+    s_sim_scenario = SIM_SCENARIO_FIELD_DEMO;
+    apply_scenario();
     ESP_LOGI(TAG, "Simulation service initialized");
     return ESP_OK;
 }
@@ -101,6 +121,36 @@ void simulation_service_set_enabled(bool enabled)
 bool simulation_service_is_enabled(void)
 {
     return s_sim_enabled;
+}
+
+esp_err_t simulation_service_reset(void)
+{
+    if (!s_sim_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    s_sim_tick_count = 0;
+    apply_scenario();
+    ESP_LOGI(TAG, "Emulator reset (scenario=%d)", (int)s_sim_scenario);
+    return ESP_OK;
+}
+
+esp_err_t simulation_service_set_scenario(simulation_scenario_t scenario)
+{
+    if (!s_sim_initialized || scenario >= SIM_SCENARIO_COUNT) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_sim_scenario = scenario;
+    return simulation_service_reset();
+}
+
+simulation_scenario_t simulation_service_get_scenario(void)
+{
+    return s_sim_scenario;
+}
+
+uint32_t simulation_service_get_tick_count(void)
+{
+    return s_sim_tick_count;
 }
 
 esp_err_t simulation_service_tick(void)

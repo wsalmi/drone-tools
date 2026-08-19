@@ -70,6 +70,7 @@
 /* Main module headers */
 #include "task_manager.h"
 #include "data_pipeline.h"
+#include "serial_bridge.h"
 
 static const char *TAG = "main";
 
@@ -576,15 +577,25 @@ static void init_phase_tasks(void)
         return;  /* Cannot proceed without pipeline */
     }
 
-    /* Task Manager initialization */
+	/* Task Manager initialization */
     err = task_manager_init();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "[BOOT] Task Manager init FAILED: %s", esp_err_to_name(err));
         init_show_status("Task Mgr", "FAIL", true);
         return;
+	}
+
+    /* USB Serial/JTAG bridge for the external static field console. */
+    err = serial_bridge_init();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "[BOOT] Serial bridge: OK (NDJSON)");
+        init_show_status("Serial NDJSON", "OK", false);
+    } else {
+        ESP_LOGW(TAG, "[BOOT] Serial bridge unavailable: %s", esp_err_to_name(err));
+        init_show_status("Serial NDJSON", "SKIP", true);
     }
 
-    /* Start Detection Service (creates Core 0 detection tasks) */
+	/* Start Detection Service (creates Core 0 detection tasks) */
     ESP_LOGI(TAG, "[BOOT] Launching Core 0 Detection Tasks (WiFi/BLE/SX1262)...");
     err = detection_service_start();
     if (err == ESP_OK) {
