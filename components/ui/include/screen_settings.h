@@ -1,11 +1,10 @@
 /**
  * @file screen_settings.h
- * @brief Settings screen — alert, spectrum, and scan configuration interface.
+ * @brief Settings screen — alert and field-monitor configuration interface.
  *
  * Provides a navigable menu for configuring system parameters:
  *   - Alert settings: sound on/off, proximity threshold
- *   - Spectrum settings: center frequency, bandwidth, gain
- *   - Scan settings: dwell times, cycle intervals
+ *   - Monitor settings: Wi-Fi/BLE cycle and SX1262 dwell time
  *
  * Navigation via UP/DOWN to move between items, ENTER to edit/toggle,
  * LEFT/RIGHT to adjust numeric values.
@@ -49,8 +48,7 @@ extern "C" {
  */
 typedef enum {
     SETTINGS_CATEGORY_ALERT = 0,    /**< Alert configuration */
-    SETTINGS_CATEGORY_SPECTRUM,     /**< Spectrum analyzer configuration */
-    SETTINGS_CATEGORY_SCAN,         /**< Scan timing configuration */
+    SETTINGS_CATEGORY_MONITOR,      /**< Wi-Fi, BLE and SX1262 monitor timing */
     SETTINGS_CATEGORY_COUNT         /**< Total categories */
 } settings_category_t;
 
