@@ -314,21 +314,22 @@ class FindingsValidator:
 
 def main():
     """Validate a findings.yaml file."""
+    repo_root = Path(__file__).resolve().parents[2]
     if len(sys.argv) < 2:
-        print("Usage: validate_findings.py <findings.yaml> [policy.yaml]")
-        sys.exit(2)
+        findings_path = repo_root / ".kiro/specs/code-quality-review/artifacts/findings.yaml"
+        policy_path = repo_root / ".kiro/specs/code-quality-review/artifacts/policy.yaml"
+    else:
+        findings_path = Path(sys.argv[1])
+        policy_path = Path(sys.argv[2]) if len(sys.argv) >= 3 else None
 
-    findings_path = Path(sys.argv[1])
     if not findings_path.exists():
         print(f"ERROR: {findings_path} not found")
         sys.exit(2)
 
     policy_data = None
-    if len(sys.argv) >= 3:
-        policy_path = Path(sys.argv[2])
-        if policy_path.exists():
-            with open(policy_path) as f:
-                policy_data = yaml.safe_load(f)
+    if policy_path is not None and policy_path.exists():
+        with open(policy_path) as f:
+            policy_data = yaml.safe_load(f)
 
     with open(findings_path) as f:
         findings_data = yaml.safe_load(f)

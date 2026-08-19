@@ -182,11 +182,12 @@ class PolicyValidator:
 # ---------------------------------------------------------------------------
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: validate_policy.py <policy.yaml>")
-        sys.exit(2)
-
-    path = Path(sys.argv[1])
+    path = (
+        Path(sys.argv[1])
+        if len(sys.argv) >= 2
+        else Path(__file__).resolve().parents[2]
+        / ".kiro/specs/code-quality-review/artifacts/policy.yaml"
+    )
     if not path.exists():
         print(f"ERROR: {path} not found")
         sys.exit(2)

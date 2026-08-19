@@ -9,7 +9,7 @@ Real-time passive drone detection and telemetry analysis firmware for the **M5 S
 ![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v5.3-blue)
 ![Target](https://img.shields.io/badge/Target-ESP32--S3-green)
 ![License](https://img.shields.io/badge/License-Private-lightgrey)
-![Build](https://github.com/source-me/drone-tools/actions/workflows/build-and-release.yml/badge.svg)
+![Build](https://github.com/wsalmi/drone-tools/actions/workflows/build-and-release.yml/badge.svg)
 
 ---
 
@@ -209,6 +209,16 @@ Release artifacts include:
 - `bootloader.bin`
 - `partition-table.bin`
 - `flasher_args.json`
+
+---
+
+## 🖥️ Field Console on GitHub Pages
+
+The companion static dashboard is published at **[wsalmi.github.io/drone-tools](https://wsalmi.github.io/drone-tools/)**. It mirrors the Cardputer field workflow, including shortcuts **1–7**, the deterministic browser emulator, aircraft telemetry views, and radar-style monitoring.
+
+To connect a compatible Chromium desktop browser to the device, open the dashboard over HTTPS, select **Connect Serial**, and grant access to the device USB serial port. The dashboard uses the browser Web Serial API and communicates through the firmware NDJSON serial bridge; it does not require a SoftAP or server-side backend.
+
+The static build is versioned in `docs/` and is served free of charge by GitHub Pages from the public `main` branch and `/docs` directory.
 
 ---
 

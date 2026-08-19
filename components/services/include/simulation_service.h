@@ -14,6 +14,14 @@
 extern "C" {
 #endif
 
+/** Deterministic trajectory profiles exposed by the built-in emulator. */
+typedef enum {
+    SIM_SCENARIO_FIELD_DEMO = 0,
+    SIM_SCENARIO_SPARSE,
+    SIM_SCENARIO_DENSE,
+    SIM_SCENARIO_COUNT
+} simulation_scenario_t;
+
 /**
  * @brief Initialize the simulation service.
  *
@@ -68,9 +76,3 @@ esp_err_t simulation_service_deinit(void);
 #endif
 
 #endif /* SIMULATION_SERVICE_H */
-typedef enum {
-    SIM_SCENARIO_FIELD_DEMO = 0,
-    SIM_SCENARIO_SPARSE,
-    SIM_SCENARIO_DENSE,
-    SIM_SCENARIO_COUNT
-} simulation_scenario_t;

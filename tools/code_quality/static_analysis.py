@@ -328,6 +328,10 @@ class SuppressionValidator:
 
         issues = []
         for file_path in directory.rglob("*"):
+            # Test fixtures deliberately contain invalid suppression snippets to
+            # exercise this validator; they are not production/test source.
+            if "fixtures" in file_path.relative_to(directory).parts:
+                continue
             if file_path.suffix in extensions or file_path.name == "CMakeLists.txt":
                 issues.extend(self.scan_file(file_path))
         return issues
