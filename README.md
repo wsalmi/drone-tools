@@ -214,7 +214,7 @@ Release artifacts include:
 
 ## 🖥️ Field Console on GitHub Pages
 
-The companion static dashboard is published at **[wsalmi.github.io/drone-tools](https://wsalmi.github.io/drone-tools/)**. It mirrors the Cardputer field workflow, including shortcuts **1–7**, the deterministic browser emulator, aircraft telemetry views, and radar-style monitoring.
+The companion static dashboard is published at **[wsalmi.github.io/drone-tools/docs](https://wsalmi.github.io/drone-tools/docs/)**. It mirrors the Cardputer field workflow, including shortcuts **1–7**, the deterministic browser emulator, aircraft telemetry views, and radar-style monitoring.
 
 To connect a compatible Chromium desktop browser to the device, open the dashboard over HTTPS, select **Connect Serial**, and grant access to the device USB serial port. The dashboard uses the browser Web Serial API and communicates through the firmware NDJSON serial bridge; it does not require a SoftAP or server-side backend.
 
