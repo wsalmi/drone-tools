@@ -151,6 +151,7 @@ add_library(esp_idf_mocks STATIC
     ${MOCKS_DIR}/esp_err_mock.c
     ${MOCKS_DIR}/esp_log_mock.c
     ${MOCKS_DIR}/esp_timer_mock.c
+    ${MOCKS_DIR}/esp_system_mock.c
     ${MOCKS_DIR}/freertos_mock.c
     ${MOCKS_DIR}/freertos_queue_mock.c
     ${MOCKS_DIR}/freertos_event_groups_mock.c

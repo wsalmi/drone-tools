@@ -176,10 +176,12 @@ esp_err_t detection_service_init(void)
     if (s_state.detection_queue == NULL) {
         return ESP_ERR_NO_MEM;
     }
+    /* Wi-Fi and BLE scanners are idle between scan phases; INACTIVE means
+     * ready, while ERROR is the only unavailable lifecycle state. */
     s_state.source_available[DETECTION_SOURCE_WIFI_RID] =
-        hal_wifi_scanner_get_status() == HAL_STATUS_ACTIVE;
+        hal_wifi_scanner_get_status() != HAL_STATUS_ERROR;
     s_state.source_available[DETECTION_SOURCE_BLE_RID] =
-        hal_ble_scanner_get_status() == HAL_STATUS_ACTIVE;
+        hal_ble_scanner_get_status() != HAL_STATUS_ERROR;
     s_state.source_available[DETECTION_SOURCE_LORA] =
         hal_lora_get_status() == HAL_STATUS_ACTIVE;
     s_state.initialized = true;
